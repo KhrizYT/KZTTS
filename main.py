@@ -9,6 +9,7 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Dict
+from urllib.parse import parse_qs, urlparse
 
 import edge_tts
 import httpx
@@ -29,10 +30,9 @@ TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET", "")
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
-app = FastAPI(title="KZTTS", version="0.3.0")
+app = FastAPI(title="KZTTS", version="0.3.1")
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -123,6 +123,7 @@ class OverlayRequest(BaseModel):
     enable_twitch: bool = True
     enable_kick: bool = False
     enable_youtube: bool = False
+    youtube_handle: str = Field(default="", max_length=100)
     voice: str = "es-MX-DaliaNeural"
     rate: int = Field(default=0, ge=-50, le=50)
     pitch: int = Field(default=0, ge=-50, le=50)
@@ -143,7 +144,7 @@ def kick_configured() -> bool:
 
 
 def youtube_configured() -> bool:
-    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+    return bool(YOUTUBE_API_KEY)
 
 
 def get_accounts(request: Request, create: bool = False) -> dict:
@@ -237,17 +238,14 @@ async def config(request: Request):
     accounts = get_accounts(request)
     twitch = accounts.get("twitch") or {}
     kick = accounts.get("kick") or {}
-    youtube = accounts.get("youtube") or {}
     return {
         "twitch_configured": twitch_configured(),
         "kick_configured": kick_configured(),
         "twitch_connected": bool(twitch),
         "kick_connected": bool(kick),
         "youtube_configured": youtube_configured(),
-        "youtube_connected": bool(youtube),
         "twitch_account": twitch.get("display_name"),
         "kick_account": kick.get("name") or kick.get("slug"),
-        "youtube_account": youtube.get("channel_title"),
         "kick_subscription_ok": kick.get("subscription_ok", False),
         "kick_subscription_error": kick.get("subscription_error", ""),
         "voices": VOICE_OPTIONS,
@@ -403,100 +401,6 @@ async def kick_callback(request: Request, code: str, state: str):
     return RedirectResponse("/")
 
 
-async def youtube_refresh(refresh_token: str) -> tuple[str, str, int]:
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
-        if r.status_code != 200:
-            raise RuntimeError(f"Google refresh {r.status_code}: {r.text[:300]}")
-        data = r.json()
-        return data["access_token"], refresh_token, int(data.get("expires_in", 3600))
-
-
-async def ensure_youtube_token(data: dict):
-    if data.get("access_token") and time.time() < float(data.get("expires_at", 0)) - 60:
-        return
-    refresh = data.get("refresh_token")
-    if not refresh:
-        raise RuntimeError("Token de YouTube vencido; reconecta YouTube")
-    access, refresh, expires_in = await youtube_refresh(refresh)
-    data["access_token"] = access
-    data["refresh_token"] = refresh
-    data["expires_at"] = time.time() + expires_in
-
-
-@app.get("/auth/youtube")
-async def youtube_login(request: Request):
-    if not youtube_configured():
-        raise HTTPException(status_code=500, detail="Faltan GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET")
-    state = secrets.token_urlsafe(24)
-    request.session["youtube_oauth_state"] = state
-    redirect_uri = f"{APP_URL}/auth/youtube/callback"
-    params = httpx.QueryParams({
-        "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": "https://www.googleapis.com/auth/youtube.readonly",
-        "access_type": "offline",
-        "include_granted_scopes": "true",
-        "prompt": "consent",
-        "state": state,
-    })
-    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
-
-
-@app.get("/auth/youtube/callback")
-async def youtube_callback(request: Request, code: str, state: str):
-    if not secrets.compare_digest(state, request.session.get("youtube_oauth_state", "")):
-        raise HTTPException(status_code=400, detail="YouTube OAuth state inválido")
-
-    redirect_uri = f"{APP_URL}/auth/youtube/callback"
-    async with httpx.AsyncClient(timeout=20) as client:
-        token_r = await client.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": redirect_uri,
-            },
-        )
-        if token_r.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Google token: {token_r.text[:300]}")
-        token_data = token_r.json()
-        access_token = token_data["access_token"]
-
-        channel_r = await client.get(
-            "https://www.googleapis.com/youtube/v3/channels",
-            headers={"Authorization": f"Bearer {access_token}"},
-            params={"part": "snippet", "mine": "true", "maxResults": 5},
-        )
-        if channel_r.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"YouTube channel: {channel_r.text[:300]}")
-        channels = channel_r.json().get("items", [])
-        if not channels:
-            raise HTTPException(status_code=400, detail="Esta cuenta de Google no tiene un canal de YouTube")
-        channel = channels[0]
-
-    get_accounts(request, create=True)["youtube"] = {
-        "channel_id": channel.get("id", ""),
-        "channel_title": (channel.get("snippet") or {}).get("title") or "YouTube",
-        "access_token": access_token,
-        "refresh_token": token_data.get("refresh_token", ""),
-        "expires_at": time.time() + int(token_data.get("expires_in", 3600)),
-    }
-    request.session.pop("youtube_oauth_state", None)
-    return RedirectResponse("/")
-
-
 @app.post("/auth/logout")
 async def logout(request: Request):
     sid = request.session.get("sid")
@@ -512,7 +416,7 @@ async def tts(req: TTSRequest, request: Request):
         raise HTTPException(status_code=400, detail="Voz no permitida")
 
     accounts = get_accounts(request)
-    authorized = bool(accounts.get("twitch") or accounts.get("kick") or accounts.get("youtube"))
+    authorized = bool(accounts.get("twitch") or accounts.get("kick"))
     if req.overlay_key:
         authorized = req.overlay_key in overlays
     if not authorized:
@@ -549,15 +453,19 @@ async def create_overlay(req: OverlayRequest, request: Request):
         raise HTTPException(status_code=400, detail="Voz no permitida")
 
     accounts = get_accounts(request)
+    if not (accounts.get("twitch") or accounts.get("kick")):
+        raise HTTPException(status_code=401, detail="Inicia sesión con Twitch o Kick primero")
     twitch = accounts.get("twitch") if req.enable_twitch else None
     kick = accounts.get("kick") if req.enable_kick else None
-    youtube = accounts.get("youtube") if req.enable_youtube else None
     if req.enable_twitch and not twitch:
         raise HTTPException(status_code=401, detail="Conecta Twitch primero")
     if req.enable_kick and not kick:
         raise HTTPException(status_code=401, detail="Conecta Kick primero")
-    if req.enable_youtube and not youtube:
-        raise HTTPException(status_code=401, detail="Conecta YouTube primero")
+    if req.enable_youtube and not youtube_configured():
+        raise HTTPException(status_code=500, detail="Falta YOUTUBE_API_KEY en Railway")
+    youtube_handle = req.youtube_handle.strip()
+    if req.enable_youtube and not youtube_handle:
+        raise HTTPException(status_code=400, detail="Escribe el @handle de YouTube")
     if req.enable_kick and not kick.get("subscription_ok"):
         raise HTTPException(
             status_code=400,
@@ -594,13 +502,9 @@ async def create_overlay(req: OverlayRequest, request: Request):
             "kick_name": kick.get("name") or kick.get("slug") or str(kick["user_id"]),
             "kick_slug": kick.get("slug", ""),
         })
-    if youtube:
+    if req.enable_youtube:
         data.update({
-            "youtube_channel_id": youtube.get("channel_id", ""),
-            "youtube_channel_title": youtube.get("channel_title", "YouTube"),
-            "youtube_access_token": youtube["access_token"],
-            "youtube_refresh_token": youtube.get("refresh_token", ""),
-            "youtube_expires_at": youtube.get("expires_at", 0),
+            "youtube_handle": youtube_handle if youtube_handle.startswith("@") else f"@{youtube_handle}",
         })
     overlays[key] = data
     return {"url": f"{APP_URL}/overlay?key={key}", "key": key}
@@ -723,43 +627,108 @@ def unregister_kick_client(user_id: int, key: str):
         kick_clients.pop(user_id, None)
 
 
-async def ensure_overlay_youtube_token(data: dict):
-    yt = {
-        "access_token": data.get("youtube_access_token", ""),
-        "refresh_token": data.get("youtube_refresh_token", ""),
-        "expires_at": data.get("youtube_expires_at", 0),
-    }
-    await ensure_youtube_token(yt)
-    data["youtube_access_token"] = yt["access_token"]
-    data["youtube_refresh_token"] = yt.get("refresh_token", "")
-    data["youtube_expires_at"] = yt.get("expires_at", 0)
+async def youtube_channel_id(data: dict) -> str:
+    cached = data.get("youtube_channel_id")
+    if cached:
+        return cached
+    handle = (data.get("youtube_handle") or "").strip()
+    if not handle:
+        raise RuntimeError("Falta el @handle de YouTube")
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(
+            "https://www.googleapis.com/youtube/v3/channels",
+            params={
+                "part": "id,snippet",
+                "forHandle": handle,
+                "key": YOUTUBE_API_KEY,
+            },
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"YouTube channel {r.status_code}: {r.text[:240]}")
+        items = r.json().get("items", [])
+        if not items:
+            raise RuntimeError(f"No encontré el canal {handle}")
+        data["youtube_channel_id"] = items[0]["id"]
+        data["youtube_channel_title"] = (items[0].get("snippet") or {}).get("title") or handle
+        return data["youtube_channel_id"]
+
+
+async def youtube_live_video_id(data: dict) -> str | None:
+    handle = (data.get("youtube_handle") or "").strip()
+    if not handle:
+        return None
+
+    # First try YouTube's public /live route. This normally redirects straight
+    # to the current broadcast and avoids consuming Search API quota.
+    try:
+        async with httpx.AsyncClient(
+            timeout=15,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 KZTTS/0.3.1"},
+        ) as client:
+            r = await client.get(f"https://www.youtube.com/{handle}/live")
+            parsed = urlparse(str(r.url))
+            if parsed.path == "/watch":
+                video_id = (parse_qs(parsed.query).get("v") or [None])[0]
+                if video_id:
+                    return video_id
+    except Exception:
+        pass
+
+    # Fallback: official Data API search. Throttled while no stream is live.
+    now = time.monotonic()
+    if now - float(data.get("youtube_last_search", 0)) < 120:
+        return None
+    data["youtube_last_search"] = now
+
+    channel_id = await youtube_channel_id(data)
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(
+            "https://www.googleapis.com/youtube/v3/search",
+            params={
+                "part": "id",
+                "channelId": channel_id,
+                "eventType": "live",
+                "type": "video",
+                "maxResults": 5,
+                "key": YOUTUBE_API_KEY,
+            },
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"YouTube live search {r.status_code}: {r.text[:240]}")
+        for item in r.json().get("items", []):
+            video_id = (item.get("id") or {}).get("videoId")
+            if video_id:
+                return video_id
+    return None
 
 
 async def youtube_active_chat(data: dict) -> tuple[str, str] | None:
-    await ensure_overlay_youtube_token(data)
+    video_id = await youtube_live_video_id(data)
+    if not video_id:
+        return None
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(
-            "https://www.googleapis.com/youtube/v3/liveBroadcasts",
-            headers={"Authorization": f"Bearer {data['youtube_access_token']}"},
+            "https://www.googleapis.com/youtube/v3/videos",
             params={
-                "part": "id,snippet,status",
-                "broadcastStatus": "active",
-                "mine": "true",
-                "maxResults": 5,
+                "part": "snippet,liveStreamingDetails",
+                "id": video_id,
+                "key": YOUTUBE_API_KEY,
             },
         )
-        if r.status_code == 401:
-            data["youtube_expires_at"] = 0
-            await ensure_overlay_youtube_token(data)
-            return await youtube_active_chat(data)
         if r.status_code != 200:
-            raise RuntimeError(f"YouTube broadcasts {r.status_code}: {r.text[:240]}")
-        for item in r.json().get("items", []):
-            snippet = item.get("snippet") or {}
-            live_chat_id = snippet.get("liveChatId")
-            if live_chat_id:
-                return live_chat_id, snippet.get("title") or "Directo de YouTube"
-    return None
+            raise RuntimeError(f"YouTube video {r.status_code}: {r.text[:240]}")
+        items = r.json().get("items", [])
+        if not items:
+            return None
+        item = items[0]
+        live = item.get("liveStreamingDetails") or {}
+        chat_id = live.get("activeLiveChatId")
+        if not chat_id:
+            return None
+        title = (item.get("snippet") or {}).get("title") or "Directo de YouTube"
+        data["youtube_video_id"] = video_id
+        return chat_id, title
 
 
 YOUTUBE_CHAT_TYPES = {
@@ -770,25 +739,20 @@ YOUTUBE_CHAT_TYPES = {
 
 
 async def youtube_chat_page(data: dict, live_chat_id: str, page_token: str | None):
-    await ensure_overlay_youtube_token(data)
     params = {
         "liveChatId": live_chat_id,
         "part": "id,snippet,authorDetails",
         "maxResults": 200,
         "hl": "es",
+        "key": YOUTUBE_API_KEY,
     }
     if page_token:
         params["pageToken"] = page_token
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(
             "https://www.googleapis.com/youtube/v3/liveChat/messages",
-            headers={"Authorization": f"Bearer {data['youtube_access_token']}"},
             params=params,
         )
-        if r.status_code == 401:
-            data["youtube_expires_at"] = 0
-            await ensure_overlay_youtube_token(data)
-            return await youtube_chat_page(data, live_chat_id, page_token)
         if r.status_code in (403, 404):
             return None
         if r.status_code != 200:
@@ -804,7 +768,11 @@ async def youtube_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str,
             active = await youtube_active_chat(data)
             if not active:
                 if not waiting_sent:
-                    await socket.send({"type": "status", "platform": "youtube", "message": "YouTube: esperando un directo activo"})
+                    await socket.send({
+                        "type": "status",
+                        "platform": "youtube",
+                        "message": f"YouTube {data.get('youtube_handle', '')}: esperando un directo activo",
+                    })
                     waiting_sent = True
                 await asyncio.sleep(20)
                 continue
@@ -821,6 +789,7 @@ async def youtube_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str,
             data.pop("youtube_chat_id", None)
             data.pop("youtube_live_title", None)
             data.pop("youtube_page_token", None)
+            data.pop("youtube_video_id", None)
             await socket.send({"type": "status", "platform": "youtube", "message": "YouTube: el directo terminó; esperando el siguiente"})
             await asyncio.sleep(12)
             continue
@@ -830,7 +799,7 @@ async def youtube_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str,
         if next_token:
             data["youtube_page_token"] = next_token
 
-        # Skip recent history on first attach; only read messages that arrive after KZTTS starts.
+        # Skip chat history on first attach; only read messages sent after KZTTS starts.
         if not first_page:
             for item in page.get("items", []):
                 snippet = item.get("snippet") or {}
@@ -839,8 +808,7 @@ async def youtube_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str,
                 message = snippet.get("displayMessage") or ""
                 author = item.get("authorDetails") or {}
                 display = author.get("displayName") or "YouTube"
-                login = display
-                clean = should_read(data, login, message, cooldowns)
+                clean = should_read(data, display, message, cooldowns)
                 if not clean:
                     continue
                 spoken = f"{display} dice: {clean}" if data["read_username"] else clean

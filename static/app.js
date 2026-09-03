@@ -1,6 +1,6 @@
 let config;
 const $ = id => document.getElementById(id);
-const STORE_KEY = 'kztts_settings_v03';
+const STORE_KEY = 'kztts_settings_v031';
 
 function loadSaved(){
   try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); }
@@ -9,6 +9,7 @@ function loadSaved(){
 function saveSettings(){
   const data = {
     channel:$('channel').value,
+    youtubeHandle:$('youtubeHandle').value,
     voice:$('voice').value,
     rate:$('rate').value,
     pitch:$('pitch').value,
@@ -31,19 +32,17 @@ async function load(){
 
   $('twitchStatus').textContent = config.twitch_connected ? `● ${config.twitch_account}` : 'No conectado';
   $('kickStatus').textContent = config.kick_connected ? `● ${config.kick_account}` : (config.kick_configured ? 'No conectado' : 'Falta configurar servidor');
-  $('youtubeStatus').textContent = config.youtube_connected ? `● ${config.youtube_account}` : (config.youtube_configured ? 'No conectado' : 'Falta configurar servidor');
+  $('youtubeStatus').textContent = config.youtube_configured ? 'Usa tu @handle' : 'Falta configurar servidor';
   $('twitchConnect').textContent = config.twitch_connected ? 'Reconectar' : 'Conectar Twitch';
   $('kickConnect').textContent = config.kick_connected ? 'Reconectar' : 'Conectar Kick';
-  $('youtubeConnect').textContent = config.youtube_connected ? 'Reconectar' : 'Conectar YouTube';
   $('kickConnect').classList.toggle('disabled', !config.kick_configured);
   if(!config.kick_configured) $('kickConnect').onclick = e => { e.preventDefault(); alert('Primero agrega KICK_CLIENT_ID y KICK_CLIENT_SECRET en Railway.'); };
-  $('youtubeConnect').classList.toggle('disabled', !config.youtube_configured);
-  if(!config.youtube_configured) $('youtubeConnect').onclick = e => { e.preventDefault(); alert('Primero agrega GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET en Railway.'); };
+  $('youtubeHandle').disabled = !config.youtube_configured;
+  if(!config.youtube_configured) $('youtubeHandle').placeholder = 'Falta YOUTUBE_API_KEY';
 
   $('account').textContent = [
     config.twitch_connected ? `Twitch: ${config.twitch_account}` : null,
     config.kick_connected ? `Kick: ${config.kick_account}` : null,
-    config.youtube_connected ? `YouTube: ${config.youtube_account}` : null,
   ].filter(Boolean).join(' · ') || 'No conectado';
 
   if(config.kick_connected && !config.kick_subscription_ok){
@@ -51,7 +50,7 @@ async function load(){
     $('kickWarning').classList.remove('hidden');
   }
 
-  const anyConnected = config.twitch_connected || config.kick_connected || config.youtube_connected;
+  const anyConnected = config.twitch_connected || config.kick_connected;
   $('settingsCard').classList.toggle('hidden', !anyConnected);
 
   for(const [value,label] of Object.entries(config.voices)){
@@ -63,6 +62,7 @@ async function load(){
 
   const saved = loadSaved();
   $('channel').value = saved.channel || config.twitch_account || '';
+  $('youtubeHandle').value = saved.youtubeHandle || '@KhrizYT';
   $('blacklist').value = saved.blacklist || config.default_blacklist.join('\n');
   $('voice').value = saved.voice || 'es-MX-DaliaNeural';
   $('rate').value = saved.rate ?? 0;
@@ -74,10 +74,10 @@ async function load(){
   $('readUsername').checked = saved.readUsername ?? false;
   $('enableTwitch').checked = config.twitch_connected && (saved.enableTwitch ?? true);
   $('enableKick').checked = config.kick_connected && config.kick_subscription_ok && (saved.enableKick ?? true);
-  $('enableYoutube').checked = config.youtube_connected && (saved.enableYoutube ?? true);
+  $('enableYoutube').checked = config.youtube_configured && !!$('youtubeHandle').value.trim() && (saved.enableYoutube ?? true);
   $('enableTwitch').disabled = !config.twitch_connected;
   $('enableKick').disabled = !config.kick_connected || !config.kick_subscription_ok;
-  $('enableYoutube').disabled = !config.youtube_connected;
+  $('enableYoutube').disabled = !config.youtube_configured || !$('youtubeHandle').value.trim();
   $('rateValue').textContent = `${$('rate').value}%`;
   $('pitchValue').textContent = `${$('pitch').value}Hz`;
 }
@@ -117,6 +117,7 @@ $('generateBtn').onclick = async () => {
     enable_twitch:$('enableTwitch').checked,
     enable_kick:$('enableKick').checked,
     enable_youtube:$('enableYoutube').checked,
+    youtube_handle:$('youtubeHandle').value.trim(),
     voice:$('voice').value,
     rate:Number($('rate').value),
     pitch:Number($('pitch').value),
@@ -144,8 +145,13 @@ $('copyBtn').onclick = async () => {
   setTimeout(()=>$('copyBtn').textContent='Copiar',1200);
 };
 
-['channel','voice','maxChars','cooldown','ignoreCommands','ignoreUrls','readUsername','blacklist','enableTwitch','enableKick','enableYoutube'].forEach(id => {
+['channel','youtubeHandle','voice','maxChars','cooldown','ignoreCommands','ignoreUrls','readUsername','blacklist','enableTwitch','enableKick','enableYoutube'].forEach(id => {
   $(id).addEventListener('change', saveSettings);
+});
+
+$('youtubeHandle').addEventListener('input', () => {
+  $('enableYoutube').disabled = !config?.youtube_configured || !$('youtubeHandle').value.trim();
+  saveSettings();
 });
 
 load();

@@ -18,7 +18,5 @@ services:
         sync: false
       - key: KICK_CLIENT_SECRET
         sync: false
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
+      - key: YOUTUBE_API_KEY
         sync: false

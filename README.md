@@ -1,4 +1,4 @@
-# KZTTS v0.3
+# KZTTS v0.3.1
 
 Cloud TTS for streams. Twitch + Kick + YouTube feed one OBS Browser Source.
 
@@ -10,8 +10,7 @@ Cloud TTS for streams. Twitch + Kick + YouTube feed one OBS Browser Source.
 - `TWITCH_CLIENT_SECRET`
 - `KICK_CLIENT_ID`
 - `KICK_CLIENT_SECRET`
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
+- `YOUTUBE_API_KEY`
 
 Start command on Railway:
 
@@ -27,13 +26,12 @@ Redirect URL: `<APP_URL>/auth/kick/callback`
 Webhook URL: `<APP_URL>/webhooks/kick`
 Scopes: `user:read channel:read events:subscribe`.
 
-## YouTube / Google Cloud
-Enable **YouTube Data API v3**. Create an OAuth 2.0 Client ID of type **Web application**.
-Authorized redirect URI: `<APP_URL>/auth/youtube/callback`
-KZTTS requests only `https://www.googleapis.com/auth/youtube.readonly`.
-For an OAuth app in Testing, add your Google account as a test user.
+## YouTube
+Enable **YouTube Data API v3** in Google Cloud and create a simple API key.
+Add the key to Railway as `YOUTUBE_API_KEY`.
 
-KZTTS detects the authenticated channel's active broadcast and reads new live-chat messages using the official YouTube Live Streaming API. It respects `pollingIntervalMillis` and skips old chat history when first attached.
+There is no Google/YouTube OAuth login in v0.3.1. In KZTTS you only type the channel handle, e.g. `@KhrizYT`.
+KZTTS resolves that handle, detects the active public livestream and reads new public live-chat messages into the same TTS queue.
 
 ## Note
-Overlay keys and auth sessions are still in RAM in v0.3. After a Railway restart/redeploy, reconnect accounts and regenerate the Browser Source URL. Dashboard TTS preferences are saved in browser localStorage.
+Twitch/Kick OAuth currently doubles as KZTTS sign-in/authorization. Overlay keys and auth sessions are still in RAM in v0.3.1. Dashboard TTS preferences are saved in browser localStorage. Persistent cloud settings per KZTTS account are the next storage step.
