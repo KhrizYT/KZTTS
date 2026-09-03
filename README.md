@@ -1,37 +1,24 @@
-# KZTTS v0.3.1
+# KZTTS v0.4
 
-Cloud TTS for streams. Twitch + Kick + YouTube feed one OBS Browser Source.
+TTS multistream cloud para Twitch, Kick, YouTube y TikTok.
 
-## Railway variables
+## v0.4
+- TikTok LIVE por `@usuario` usando TikTokLive 7.0.0 (sin login de TikTok).
+- Browser Source estable por cuenta: guardar cambios reutiliza la misma URL.
+- Al guardar cambios, la Browser Source abierta se reconecta sola con la nueva configuración.
+- Twitch + Kick + YouTube + TikTok comparten filtros, voz y cola.
 
-- `APP_URL`
-- `SESSION_SECRET`
-- `TWITCH_CLIENT_ID`
-- `TWITCH_CLIENT_SECRET`
-- `KICK_CLIENT_ID`
-- `KICK_CLIENT_SECRET`
-- `YOUTUBE_API_KEY`
+## Railway
+Conserva las variables ya existentes:
+- APP_URL
+- SESSION_SECRET (NO cambiar; también mantiene estable la URL de OBS)
+- TWITCH_CLIENT_ID
+- TWITCH_CLIENT_SECRET
+- KICK_CLIENT_ID
+- KICK_CLIENT_SECRET
+- YOUTUBE_API_KEY
 
-Start command on Railway:
+No hay variables nuevas para TikTok.
 
-```bash
-sh -c 'uvicorn main:app --host 0.0.0.0 --port "$PORT"'
-```
-
-## Twitch app
-Redirect URL: `<APP_URL>/auth/twitch/callback`
-
-## Kick app
-Redirect URL: `<APP_URL>/auth/kick/callback`
-Webhook URL: `<APP_URL>/webhooks/kick`
-Scopes: `user:read channel:read events:subscribe`.
-
-## YouTube
-Enable **YouTube Data API v3** in Google Cloud and create a simple API key.
-Add the key to Railway as `YOUTUBE_API_KEY`.
-
-There is no Google/YouTube OAuth login in v0.3.1. In KZTTS you only type the channel handle, e.g. `@KhrizYT`.
-KZTTS resolves that handle, detects the active public livestream and reads new public live-chat messages into the same TTS queue.
-
-## Note
-Twitch/Kick OAuth currently doubles as KZTTS sign-in/authorization. Overlay keys and auth sessions are still in RAM in v0.3.1. Dashboard TTS preferences are saved in browser localStorage. Persistent cloud settings per KZTTS account are the next storage step.
+## Nota TikTok
+TikTok no ofrece una API pública oficial para leer los comentarios de LIVE. Esta versión usa TikTokLive, un cliente comunitario/no oficial. Puede requerir cambios si TikTok modifica su protocolo.

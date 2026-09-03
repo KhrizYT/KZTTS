@@ -10,6 +10,7 @@ function saveSettings(){
   const data = {
     channel:$('channel').value,
     youtubeHandle:$('youtubeHandle').value,
+    tiktokHandle:$('tiktokHandle').value,
     voice:$('voice').value,
     rate:$('rate').value,
     pitch:$('pitch').value,
@@ -22,6 +23,7 @@ function saveSettings(){
     enableTwitch:$('enableTwitch').checked,
     enableKick:$('enableKick').checked,
     enableYoutube:$('enableYoutube').checked,
+    enableTiktok:$('enableTiktok').checked,
   };
   localStorage.setItem(STORE_KEY, JSON.stringify(data));
 }
@@ -33,12 +35,14 @@ async function load(){
   $('twitchStatus').textContent = config.twitch_connected ? `● ${config.twitch_account}` : 'No conectado';
   $('kickStatus').textContent = config.kick_connected ? `● ${config.kick_account}` : (config.kick_configured ? 'No conectado' : 'Falta configurar servidor');
   $('youtubeStatus').textContent = config.youtube_configured ? 'Usa tu @handle' : 'Falta configurar servidor';
+  $('tiktokStatus').textContent = config.tiktok_configured ? 'Usa tu @usuario' : 'TikTok no disponible';
   $('twitchConnect').textContent = config.twitch_connected ? 'Reconectar' : 'Conectar Twitch';
   $('kickConnect').textContent = config.kick_connected ? 'Reconectar' : 'Conectar Kick';
   $('kickConnect').classList.toggle('disabled', !config.kick_configured);
   if(!config.kick_configured) $('kickConnect').onclick = e => { e.preventDefault(); alert('Primero agrega KICK_CLIENT_ID y KICK_CLIENT_SECRET en Railway.'); };
   $('youtubeHandle').disabled = !config.youtube_configured;
   if(!config.youtube_configured) $('youtubeHandle').placeholder = 'Falta YOUTUBE_API_KEY';
+  $('tiktokHandle').disabled = !config.tiktok_configured;
 
   $('account').textContent = [
     config.twitch_connected ? `Twitch: ${config.twitch_account}` : null,
@@ -63,6 +67,7 @@ async function load(){
   const saved = loadSaved();
   $('channel').value = saved.channel || config.twitch_account || '';
   $('youtubeHandle').value = saved.youtubeHandle || '@KhrizYT';
+  $('tiktokHandle').value = saved.tiktokHandle || '';
   $('blacklist').value = saved.blacklist || config.default_blacklist.join('\n');
   $('voice').value = saved.voice || 'es-MX-DaliaNeural';
   $('rate').value = saved.rate ?? 0;
@@ -75,9 +80,11 @@ async function load(){
   $('enableTwitch').checked = config.twitch_connected && (saved.enableTwitch ?? true);
   $('enableKick').checked = config.kick_connected && config.kick_subscription_ok && (saved.enableKick ?? true);
   $('enableYoutube').checked = config.youtube_configured && !!$('youtubeHandle').value.trim() && (saved.enableYoutube ?? true);
+  $('enableTiktok').checked = config.tiktok_configured && !!$('tiktokHandle').value.trim() && (saved.enableTiktok ?? false);
   $('enableTwitch').disabled = !config.twitch_connected;
   $('enableKick').disabled = !config.kick_connected || !config.kick_subscription_ok;
   $('enableYoutube').disabled = !config.youtube_configured || !$('youtubeHandle').value.trim();
+  $('enableTiktok').disabled = !config.tiktok_configured || !$('tiktokHandle').value.trim();
   $('rateValue').textContent = `${$('rate').value}%`;
   $('pitchValue').textContent = `${$('pitch').value}Hz`;
 }
@@ -118,6 +125,9 @@ $('generateBtn').onclick = async () => {
     enable_kick:$('enableKick').checked,
     enable_youtube:$('enableYoutube').checked,
     youtube_handle:$('youtubeHandle').value.trim(),
+    enable_tiktok:$('enableTiktok').checked,
+    tiktok_handle:$('tiktokHandle').value.trim(),
+    overlay_key: config?.overlay_key || null,
     voice:$('voice').value,
     rate:Number($('rate').value),
     pitch:Number($('pitch').value),
@@ -136,6 +146,8 @@ $('generateBtn').onclick = async () => {
   const data = await r.json();
   if(!r.ok){ alert(data.detail || 'Error generando fuente'); return; }
   $('sourceUrl').value = data.url;
+  config.overlay_key = data.key;
+  config.overlay_url = data.url;
   $('sourceBox').classList.remove('hidden');
 };
 
@@ -145,12 +157,17 @@ $('copyBtn').onclick = async () => {
   setTimeout(()=>$('copyBtn').textContent='Copiar',1200);
 };
 
-['channel','youtubeHandle','voice','maxChars','cooldown','ignoreCommands','ignoreUrls','readUsername','blacklist','enableTwitch','enableKick','enableYoutube'].forEach(id => {
+['channel','youtubeHandle','tiktokHandle','voice','maxChars','cooldown','ignoreCommands','ignoreUrls','readUsername','blacklist','enableTwitch','enableKick','enableYoutube','enableTiktok'].forEach(id => {
   $(id).addEventListener('change', saveSettings);
 });
 
 $('youtubeHandle').addEventListener('input', () => {
   $('enableYoutube').disabled = !config?.youtube_configured || !$('youtubeHandle').value.trim();
+  saveSettings();
+});
+
+$('tiktokHandle').addEventListener('input', () => {
+  $('enableTiktok').disabled = !config?.tiktok_configured || !$('tiktokHandle').value.trim();
   saveSettings();
 });
 

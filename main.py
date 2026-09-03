@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -23,6 +24,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
+try:
+    from TikTokLive import TikTokLiveClient
+    from TikTokLive.events import CommentEvent
+    TIKTOKLIVE_AVAILABLE = True
+except Exception:
+    TikTokLiveClient = None
+    CommentEvent = None
+    TIKTOKLIVE_AVAILABLE = False
+
 BASE_DIR = Path(__file__).resolve().parent
 APP_URL = os.getenv("APP_URL", "http://localhost:8000").rstrip("/")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-secret-change-me")
@@ -32,7 +42,7 @@ KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
-app = FastAPI(title="KZTTS", version="0.3.1")
+app = FastAPI(title="KZTTS", version="0.4.0")
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -41,10 +51,13 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
-# MVP storage. A deploy/restart still requires regenerating the Browser Source.
+# Runtime overlay configs. The overlay key itself is stable per account, so changing settings no longer changes the OBS URL.
 overlays: Dict[str, dict] = {}
 # Auth tokens stay server-side; the browser cookie contains only a random session id.
 account_sessions: Dict[str, dict] = {}
+# Active OBS Browser Sources. Updating settings restarts these sockets automatically,
+# so OBS keeps the exact same URL and reconnects with the new configuration.
+overlay_sources: Dict[str, list["OverlaySocket"]] = {}
 
 VOICE_OPTIONS = {
     "es-MX-DaliaNeural": "Dalia — México (femenina)",
@@ -124,6 +137,9 @@ class OverlayRequest(BaseModel):
     enable_kick: bool = False
     enable_youtube: bool = False
     youtube_handle: str = Field(default="", max_length=100)
+    enable_tiktok: bool = False
+    tiktok_handle: str = Field(default="", max_length=100)
+    overlay_key: str | None = Field(default=None, max_length=100)
     voice: str = "es-MX-DaliaNeural"
     rate: int = Field(default=0, ge=-50, le=50)
     pitch: int = Field(default=0, ge=-50, le=50)
@@ -145,6 +161,24 @@ def kick_configured() -> bool:
 
 def youtube_configured() -> bool:
     return bool(YOUTUBE_API_KEY)
+
+
+def tiktok_configured() -> bool:
+    return TIKTOKLIVE_AVAILABLE
+
+
+def stable_overlay_key(accounts: dict) -> str:
+    """Return a private deterministic OBS key for this signed-in KZTTS account."""
+    twitch = accounts.get("twitch") or {}
+    kick = accounts.get("kick") or {}
+    if twitch.get("login"):
+        identity = f"twitch:{twitch['login'].lower()}"
+    elif kick.get("user_id") is not None:
+        identity = f"kick:{kick['user_id']}"
+    else:
+        raise HTTPException(status_code=401, detail="Inicia sesión con Twitch o Kick primero")
+    digest = hmac.new(SESSION_SECRET.encode(), f"kztts-overlay:{identity}".encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
 def get_accounts(request: Request, create: bool = False) -> dict:
@@ -238,12 +272,19 @@ async def config(request: Request):
     accounts = get_accounts(request)
     twitch = accounts.get("twitch") or {}
     kick = accounts.get("kick") or {}
+    overlay_key = None
+    if twitch or kick:
+        try:
+            overlay_key = stable_overlay_key(accounts)
+        except Exception:
+            overlay_key = None
     return {
         "twitch_configured": twitch_configured(),
         "kick_configured": kick_configured(),
         "twitch_connected": bool(twitch),
         "kick_connected": bool(kick),
         "youtube_configured": youtube_configured(),
+        "tiktok_configured": tiktok_configured(),
         "twitch_account": twitch.get("display_name"),
         "kick_account": kick.get("name") or kick.get("slug"),
         "kick_subscription_ok": kick.get("subscription_ok", False),
@@ -251,6 +292,9 @@ async def config(request: Request):
         "voices": VOICE_OPTIONS,
         "default_blacklist": BOT_DEFAULTS,
         "app_url": APP_URL,
+        "overlay_key": overlay_key,
+        "overlay_url": f"{APP_URL}/overlay?key={overlay_key}" if overlay_key else None,
+        "overlay_configured": bool(overlay_key and overlay_key in overlays),
         "kick_webhook_url": f"{APP_URL}/webhooks/kick",
     }
 
@@ -447,7 +491,7 @@ async def tts(req: TTSRequest, request: Request):
 
 @app.post("/api/overlay")
 async def create_overlay(req: OverlayRequest, request: Request):
-    if not req.enable_twitch and not req.enable_kick and not req.enable_youtube:
+    if not req.enable_twitch and not req.enable_kick and not req.enable_youtube and not req.enable_tiktok:
         raise HTTPException(status_code=400, detail="Activa al menos una plataforma")
     if req.voice not in VOICE_OPTIONS:
         raise HTTPException(status_code=400, detail="Voz no permitida")
@@ -466,13 +510,22 @@ async def create_overlay(req: OverlayRequest, request: Request):
     youtube_handle = req.youtube_handle.strip()
     if req.enable_youtube and not youtube_handle:
         raise HTTPException(status_code=400, detail="Escribe el @handle de YouTube")
+    tiktok_handle = req.tiktok_handle.strip()
+    if req.enable_tiktok and not tiktok_configured():
+        raise HTTPException(status_code=500, detail="TikTokLive no está disponible en el servidor")
+    if req.enable_tiktok and not tiktok_handle:
+        raise HTTPException(status_code=400, detail="Escribe el @usuario de TikTok")
     if req.enable_kick and not kick.get("subscription_ok"):
         raise HTTPException(
             status_code=400,
             detail=f"Kick conectado, pero falta la suscripción al chat: {kick.get('subscription_error') or 'reconecta Kick'}",
         )
 
-    key = secrets.token_urlsafe(32)
+    requested_key = (req.overlay_key or "").strip()
+    if requested_key and re.fullmatch(r"[A-Za-z0-9_-]{24,100}", requested_key):
+        key = requested_key
+    else:
+        key = stable_overlay_key(accounts)
     data = {
         "voice": req.voice,
         "rate": req.rate,
@@ -486,6 +539,7 @@ async def create_overlay(req: OverlayRequest, request: Request):
         "enable_twitch": req.enable_twitch,
         "enable_kick": req.enable_kick,
         "enable_youtube": req.enable_youtube,
+        "enable_tiktok": req.enable_tiktok,
         "created_at": int(time.time()),
     }
     if twitch:
@@ -506,8 +560,26 @@ async def create_overlay(req: OverlayRequest, request: Request):
         data.update({
             "youtube_handle": youtube_handle if youtube_handle.startswith("@") else f"@{youtube_handle}",
         })
-    overlays[key] = data
-    return {"url": f"{APP_URL}/overlay?key={key}", "key": key}
+    if req.enable_tiktok:
+        data.update({
+            "tiktok_handle": tiktok_handle if tiktok_handle.startswith("@") else f"@{tiktok_handle}",
+        })
+    existing = overlays.get(key)
+    if existing is None:
+        overlays[key] = data
+    else:
+        existing.clear()
+        existing.update(data)
+        data = existing
+
+    # Force currently open OBS sources to reconnect automatically using the same URL.
+    for source in list(overlay_sources.get(key, [])):
+        try:
+            await source.ws.close(code=1012)
+        except Exception:
+            pass
+
+    return {"url": f"{APP_URL}/overlay?key={key}", "key": key, "updated": True}
 
 
 def sanitize_text(text: str, max_chars: int) -> str:
@@ -838,6 +910,95 @@ async def youtube_reader_safe(socket: OverlaySocket, data: dict, cooldowns: Dict
             pass
 
 
+def tiktok_user_fields(event) -> tuple[str, str]:
+    user = getattr(event, "user", None)
+    unique_id = (getattr(user, "unique_id", "") or "").strip()
+    nickname = (getattr(user, "nickname", "") or "").strip()
+    login = unique_id or nickname or "tiktok"
+    display = nickname or unique_id or "TikTok"
+    return login, display
+
+
+async def tiktok_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str, float]):
+    handle = (data.get("tiktok_handle") or "").strip()
+    if not handle:
+        raise RuntimeError("Falta el @usuario de TikTok")
+
+    retry = 8
+    waiting_sent = False
+    while True:
+        client = TikTokLiveClient(unique_id=handle)
+
+        async def on_comment(event):
+            login, display = tiktok_user_fields(event)
+            message = (getattr(event, "comment", "") or "").strip()
+            clean = should_read(data, login, message, cooldowns)
+            if not clean:
+                return
+            spoken = f"{display} dice: {clean}" if data["read_username"] else clean
+            await socket.send({
+                "type": "message",
+                "platform": "tiktok",
+                "user": display,
+                "text": spoken,
+                "voice": data["voice"],
+                "rate": data["rate"],
+                "pitch": data["pitch"],
+            })
+
+        client.add_listener(CommentEvent, on_comment)
+        try:
+            is_live = await client.is_live()
+            if not is_live:
+                if not waiting_sent:
+                    await socket.send({
+                        "type": "status",
+                        "platform": "tiktok",
+                        "message": f"TikTok {handle}: esperando un LIVE activo",
+                    })
+                    waiting_sent = True
+                await asyncio.sleep(15)
+                continue
+
+            waiting_sent = False
+            await socket.send({"type": "status", "platform": "tiktok", "message": f"TikTok conectando a {handle}"})
+            live_task = await client.start()
+            retry = 8
+            await socket.send({"type": "status", "platform": "tiktok", "message": f"TikTok {handle} conectado"})
+            await live_task
+            await socket.send({"type": "status", "platform": "tiktok", "message": f"TikTok {handle}: LIVE terminado; esperando el siguiente"})
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            try:
+                if getattr(client, "connected", False):
+                    await client.disconnect()
+            except Exception:
+                pass
+            raise
+        except Exception as exc:
+            await socket.send({"type": "error", "platform": "tiktok", "message": f"TikTok: {exc}"})
+            await asyncio.sleep(retry)
+            retry = min(int(retry * 1.7), 45)
+        finally:
+            try:
+                if getattr(client, "connected", False):
+                    await client.disconnect()
+            except Exception:
+                pass
+
+
+async def tiktok_reader_safe(socket: OverlaySocket, data: dict, cooldowns: Dict[str, float]):
+    try:
+        await tiktok_reader(socket, data, cooldowns)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        try:
+            await socket.send({"type": "error", "platform": "tiktok", "message": f"TikTok: {exc}"})
+        except Exception:
+            pass
+
+
 @app.websocket("/ws/overlay")
 async def overlay_ws(client_ws: WebSocket, key: str):
     await client_ws.accept()
@@ -848,10 +1009,13 @@ async def overlay_ws(client_ws: WebSocket, key: str):
         return
 
     socket = OverlaySocket(client_ws)
+    overlay_sources.setdefault(key, []).append(socket)
     twitch_task = None
     youtube_task = None
+    tiktok_task = None
     twitch_cooldowns: Dict[str, float] = {}
     youtube_cooldowns: Dict[str, float] = {}
+    tiktok_cooldowns: Dict[str, float] = {}
     try:
         if data.get("enable_kick"):
             register_kick_client(data["kick_user_id"], key, socket)
@@ -860,6 +1024,8 @@ async def overlay_ws(client_ws: WebSocket, key: str):
             twitch_task = asyncio.create_task(twitch_reader_safe(socket, data, twitch_cooldowns))
         if data.get("enable_youtube"):
             youtube_task = asyncio.create_task(youtube_reader_safe(socket, data, youtube_cooldowns))
+        if data.get("enable_tiktok"):
+            tiktok_task = asyncio.create_task(tiktok_reader_safe(socket, data, tiktok_cooldowns))
 
         # Browser Source doesn't need to send anything. Waiting here lets us detect disconnects.
         while True:
@@ -884,8 +1050,19 @@ async def overlay_ws(client_ws: WebSocket, key: str):
                 await youtube_task
             except BaseException:
                 pass
+        if tiktok_task:
+            tiktok_task.cancel()
+            try:
+                await tiktok_task
+            except BaseException:
+                pass
         if data.get("enable_kick"):
             unregister_kick_client(data["kick_user_id"], key)
+        sources = overlay_sources.get(key, [])
+        if socket in sources:
+            sources.remove(socket)
+        if not sources:
+            overlay_sources.pop(key, None)
         try:
             await client_ws.close()
         except Exception:

@@ -6,3 +6,4 @@ websockets==15.0.1
 python-multipart==0.0.20
 itsdangerous==2.2.0
 cryptography==45.0.6
+TikTokLive==7.0.0

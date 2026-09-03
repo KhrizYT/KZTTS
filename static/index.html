@@ -32,6 +32,10 @@
           <div><strong>YouTube</strong><p id="youtubeStatus">Usa tu @handle</p></div>
           <input id="youtubeHandle" placeholder="@TuCanal" aria-label="Handle de YouTube" />
         </div>
+        <div class="platform-card tiktok-card">
+          <div><strong>TikTok</strong><p id="tiktokStatus">Usa tu @usuario</p></div>
+          <input id="tiktokHandle" placeholder="@TuUsuario" aria-label="Usuario de TikTok" />
+        </div>
       </div>
       <div id="kickWarning" class="warning hidden"></div>
     </section>
@@ -43,6 +47,7 @@
         <label><input id="enableTwitch" type="checkbox" /> Twitch</label>
         <label><input id="enableKick" type="checkbox" /> Kick</label>
         <label><input id="enableYoutube" type="checkbox" /> YouTube</label>
+        <label><input id="enableTiktok" type="checkbox" /> TikTok</label>
       </div>
 
       <div class="grid">
@@ -81,11 +86,11 @@
         <button class="btn" id="testBtn">Probar voz</button>
       </div>
 
-      <button class="btn primary wide" id="generateBtn">Generar Browser Source multistream</button>
+      <button class="btn primary wide" id="generateBtn">Guardar / actualizar Browser Source</button>
       <div id="sourceBox" class="source hidden">
         <div>
           <strong>URL privada para OBS</strong>
-          <p>Una sola fuente reproduce Twitch + Kick + YouTube. No la compartas.</p>
+          <p>Esta URL es fija. Una sola fuente reproduce Twitch + Kick + YouTube + TikTok. No la compartas.</p>
         </div>
         <input id="sourceUrl" readonly />
         <button class="btn" id="copyBtn">Copiar</button>
@@ -94,7 +99,7 @@
 
     <section class="card roadmap">
       <h2>Plataformas</h2>
-      <div class="chips"><span>Twitch ✓</span><span>Kick ✓</span><span>YouTube ✓</span><span>TikTok</span></div>
+      <div class="chips"><span>Twitch ✓</span><span>Kick ✓</span><span>YouTube ✓</span><span>TikTok ✓</span></div>
     </section>
   </main>
   <script src="/static/app.js"></script>
