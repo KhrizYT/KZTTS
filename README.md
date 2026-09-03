@@ -1,22 +1,29 @@
-# KZTTS v0.5 — persistencia real
+# KZTTS v0.6
 
-Esta versión convierte el prototipo en una app persistente:
+Rediseño completo del dashboard de KZTTS sobre la base persistente de v0.5.
 
-- PostgreSQL guarda la cuenta KZTTS y la configuración del TTS.
-- Los tokens OAuth de Twitch/Kick se guardan cifrados usando una clave derivada de `SESSION_SECRET`.
-- Twitch/Kick siguen conectados después de un redeploy (salvo que el proveedor revoque/caduque el token).
-- La Browser Source se guarda en la cuenta y conserva la misma URL entre deploys.
-- Voz, velocidad, tono, blacklist, cooldown, plataformas, @YouTube y @TikTok se guardan en la nube.
-- La configuración de localStorage de v0.4 se usa como migración si todavía no existe una copia cloud.
+## Novedades
 
-## Railway
+- Dashboard con sidebar y páginas: Resumen, Plataformas, TTS · Voz, Filtros y OBS.
+- Biblioteca visual de voces mexicanas gratuitas.
+- Guardado automático en PostgreSQL, además del botón de guardado manual.
+- Browser Source permanente: la URL de OBS no cambia al modificar ajustes.
+- Control de TTS en vivo desde el dashboard: pausar/reanudar, skip y vaciar cola.
+- Estado de la Browser Source, mensaje actual y tamaño de cola en tiempo real.
+- Volumen configurable.
+- Modo `Leer todo` o `Sólo comando` (por defecto `!tts`).
+- Twitch + Kick + YouTube + TikTok siguen usando la misma cola.
 
-1. Añade un servicio PostgreSQL al mismo proyecto.
-2. En el servicio `kztts` agrega una Reference Variable:
-   `DATABASE_URL=${{Postgres.DATABASE_URL}}`
-3. Mantén `SESSION_SECRET` exactamente igual. Si lo cambias, las sesiones y los tokens cifrados anteriores dejan de poder recuperarse.
-4. Redeploy.
-5. Reconecta Twitch y Kick una última vez para migrarlos a la base.
-6. Pulsa **Guardar configuración**. Desde ahí la configuración y la URL quedan persistentes.
+## Actualización desde v0.5
 
-No pongas `DATABASE_URL` ni ningún secret en GitHub.
+Reemplaza en GitHub:
+
+- `main.py`
+- `static/index.html`
+- `static/app.js`
+- `static/style.css`
+- `static/overlay.html`
+
+No necesitas cambiar PostgreSQL ni añadir nuevas variables de entorno.
+
+Railway redeployará automáticamente. La URL permanente de OBS vinculada a tu cuenta se conserva.

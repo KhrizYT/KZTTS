@@ -4,88 +4,57 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>KZTTS Source</title>
-  <style>
-    html,body{margin:0;background:transparent;color:white;font-family:system-ui,sans-serif;overflow:hidden}
-    #status{display:none}
-  </style>
+  <style>html,body{margin:0;background:transparent;color:white;font-family:system-ui,sans-serif;overflow:hidden}#status{display:none}</style>
 </head>
 <body>
   <div id="status">KZTTS iniciando…</div>
   <script>
-    const params = new URLSearchParams(location.search);
-    const key = params.get('key');
-    const statusEl = document.getElementById('status');
-    const queue = [];
-    let speaking = false;
-    let retry = 1000;
-
-    function setStatus(text){ statusEl.textContent = text; }
-
+    const params=new URLSearchParams(location.search);const key=params.get('key');const statusEl=document.getElementById('status');
+    const queue=[];let speaking=false,paused=false,retry=1000,currentAudio=null,currentItem=null,volume=100,ws=null,abortCurrent=null;
+    const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+    function setStatus(t){statusEl.textContent=t}
+    function report(){
+      if(!ws||ws.readyState!==WebSocket.OPEN)return;
+      ws.send(JSON.stringify({type:'client_state',queue_length:queue.length,speaking,paused,current:currentItem?.text||'',platform:currentItem?.platform||'',volume}));
+    }
+    function applyVolume(){if(currentAudio)currentAudio.volume=Math.max(0,Math.min(1,volume/100))}
     async function speak(item){
-      const r = await fetch('/api/tts', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          text:item.text,
-          voice:item.voice,
-          rate:item.rate,
-          pitch:item.pitch,
-          overlay_key:key
-        })
-      });
-      if(!r.ok) throw new Error(await r.text());
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.volume = 1;
-      await audio.play();
+      const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:item.text,voice:item.voice,rate:item.rate,pitch:item.pitch,overlay_key:key})});
+      if(!r.ok)throw new Error(await r.text());const blob=await r.blob();const url=URL.createObjectURL(blob);const audio=new Audio(url);currentAudio=audio;volume=Number.isFinite(Number(item.volume))?Number(item.volume):volume;applyVolume();
       await new Promise((resolve,reject)=>{
-        audio.onended=resolve;
-        audio.onerror=()=>reject(new Error('Error reproduciendo audio'));
+        let done=false;const finish=()=>{if(done)return;done=true;resolve()};abortCurrent=()=>{try{audio.pause();audio.currentTime=0}catch{}finish()};
+        audio.onended=finish;audio.onerror=()=>{if(done)return;done=true;reject(new Error('Error reproduciendo audio'))};
+        if(paused){audio.pause()}else{audio.play().catch(reject)};
       });
-      URL.revokeObjectURL(url);
+      abortCurrent=null;currentAudio=null;URL.revokeObjectURL(url);
     }
-
     async function drain(){
-      if(speaking) return;
-      speaking = true;
+      if(speaking)return;speaking=true;report();
       while(queue.length){
-        const item = queue.shift();
-        try{
-          setStatus(`[${item.platform}] ${item.user}: ${item.text}`);
-          await speak(item);
-        }catch(e){
-          setStatus(`KZTTS error: ${e.message}`);
-          await new Promise(r=>setTimeout(r,1200));
-        }
+        while(paused)await sleep(120);
+        currentItem=queue.shift();report();
+        try{setStatus(`[${currentItem.platform}] ${currentItem.user}: ${currentItem.text}`);await speak(currentItem)}catch(e){setStatus(`KZTTS error: ${e.message}`);await sleep(700)}
+        currentItem=null;report();
       }
-      speaking = false;
-      setStatus('KZTTS listo');
+      speaking=false;currentItem=null;report();setStatus('KZTTS listo');
     }
-
+    function handleControl(data){
+      const a=data.action;
+      if(a==='pause'){paused=true;if(currentAudio)currentAudio.pause()}
+      if(a==='resume'){paused=false;if(currentAudio)currentAudio.play().catch(()=>{});drain()}
+      if(a==='skip'){if(abortCurrent)abortCurrent();else{currentItem=null;drain()}}
+      if(a==='clear'){queue.splice(0,queue.length)}
+      if(a==='stop'){queue.splice(0,queue.length);if(abortCurrent)abortCurrent()}
+      if(a==='set_volume'){volume=Math.max(0,Math.min(100,Number(data.value)||0));applyVolume()}
+      report();
+    }
     function connect(){
-      if(!key){ setStatus('KZTTS: falta key'); return; }
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${proto}://${location.host}/ws/overlay?key=${encodeURIComponent(key)}`);
-      ws.onopen = () => { retry = 1000; };
-      ws.onmessage = ev => {
-        const data = JSON.parse(ev.data);
-        if(data.type === 'message'){
-          queue.push(data);
-          drain();
-        } else if(data.type === 'status' || data.type === 'error'){
-          setStatus(`KZTTS: ${data.message}`);
-        }
-      };
-      ws.onclose = () => {
-        setStatus('KZTTS reconectando…');
-        setTimeout(connect, retry);
-        retry = Math.min(retry * 1.7, 10000);
-      };
-      ws.onerror = () => ws.close();
+      if(!key){setStatus('KZTTS: falta key');return}const proto=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(`${proto}://${location.host}/ws/overlay?key=${encodeURIComponent(key)}`);
+      ws.onopen=()=>{retry=1000;report()};
+      ws.onmessage=ev=>{const data=JSON.parse(ev.data);if(data.type==='message'){queue.push(data);report();drain()}else if(data.type==='control'){handleControl(data)}else if(data.type==='settings'){if(data.volume!=null){volume=Number(data.volume);applyVolume();report()}}else if(data.type==='status'||data.type==='error'){setStatus(`KZTTS: ${data.message}`)}};
+      ws.onclose=()=>{setStatus('KZTTS reconectando…');setTimeout(connect,retry);retry=Math.min(retry*1.7,10000)};ws.onerror=()=>ws.close();
     }
-
-    connect();
+    setInterval(report,2500);connect();
   </script>
 </body>
 </html>

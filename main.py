@@ -44,7 +44,7 @@ KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
-app = FastAPI(title="KZTTS", version="0.5.0")
+app = FastAPI(title="KZTTS", version="0.6.0")
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -58,6 +58,8 @@ overlays: Dict[str, dict] = {}
 # Active OBS Browser Sources. Updating settings restarts these sockets automatically,
 # so OBS keeps the exact same URL and reconnects with the new configuration.
 overlay_sources: Dict[str, list["OverlaySocket"]] = {}
+# Last runtime state reported by each OBS Browser Source.
+overlay_states: Dict[str, dict] = {}
 
 VOICE_OPTIONS = {
     "es-MX-DaliaNeural": "Dalia — México (femenina)",
@@ -138,6 +140,11 @@ class TestMessageRequest(BaseModel):
     overlay_key: str | None = Field(default=None, max_length=100)
 
 
+class ControlRequest(BaseModel):
+    action: str = Field(max_length=30)
+    value: float | int | bool | None = None
+
+
 class OverlayRequest(BaseModel):
     channel: str = Field(default="", max_length=50)
     enable_twitch: bool = True
@@ -156,6 +163,10 @@ class OverlayRequest(BaseModel):
     read_username: bool = False
     max_chars: int = Field(default=180, ge=20, le=400)
     cooldown: float = Field(default=2.0, ge=0, le=60)
+    tts_enabled: bool = True
+    read_mode: str = Field(default="all", max_length=20)
+    command_prefix: str = Field(default="!tts", max_length=30)
+    volume: int = Field(default=100, ge=0, le=100)
 
 
 def twitch_configured() -> bool:
@@ -372,6 +383,8 @@ async def config(request: Request):
         "overlay_configured": bool(saved),
         "saved_settings": saved,
         "kick_webhook_url": f"{APP_URL}/webhooks/kick",
+        "overlay_online": bool(overlay_key and overlay_sources.get(overlay_key)),
+        "runtime": overlay_states.get(overlay_key, {}) if overlay_key else {},
     }
 
 
@@ -622,6 +635,7 @@ async def test_message(req: TestMessageRequest, request: Request):
         "voice": data["voice"],
         "rate": data["rate"],
         "pitch": data["pitch"],
+        "volume": data.get("volume", 100),
     }
     sent = 0
     for socket in sockets:
@@ -635,12 +649,53 @@ async def test_message(req: TestMessageRequest, request: Request):
     return {"ok": True, "sent": sent}
 
 
+@app.get("/api/runtime")
+async def runtime_state(request: Request):
+    key = account_overlay_key(request)
+    return {
+        "online": bool(overlay_sources.get(key)),
+        "state": overlay_states.get(key, {}),
+    }
+
+
+@app.post("/api/control")
+async def overlay_control(req: ControlRequest, request: Request):
+    key = account_overlay_key(request)
+    allowed = {"pause", "resume", "skip", "clear", "stop", "set_volume"}
+    action = req.action.strip().lower()
+    if action not in allowed:
+        raise HTTPException(status_code=400, detail="Control no válido")
+    sockets = list(overlay_sources.get(key, []))
+    if not sockets:
+        raise HTTPException(status_code=409, detail="La Browser Source de KZTTS no está abierta en OBS")
+    payload = {"type": "control", "action": action}
+    if action == "set_volume":
+        try:
+            payload["value"] = max(0, min(100, int(req.value if req.value is not None else 100)))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Volumen no válido")
+    sent = 0
+    for socket in sockets:
+        try:
+            await socket.send(payload)
+            sent += 1
+        except Exception:
+            pass
+    if not sent:
+        raise HTTPException(status_code=409, detail="No pude comunicarme con OBS")
+    return {"ok": True, "sent": sent}
+
+
 @app.post("/api/overlay")
 async def create_overlay(req: OverlayRequest, request: Request):
     if not req.enable_twitch and not req.enable_kick and not req.enable_youtube and not req.enable_tiktok:
         raise HTTPException(status_code=400, detail="Activa al menos una plataforma")
     if req.voice not in VOICE_OPTIONS:
         raise HTTPException(status_code=400, detail="Voz no permitida")
+    if req.read_mode not in {"all", "command"}:
+        raise HTTPException(status_code=400, detail="Modo de lectura no válido")
+    if req.read_mode == "command" and not req.command_prefix.strip():
+        raise HTTPException(status_code=400, detail="Escribe un comando para el modo por comando")
 
     accounts = get_accounts(request)
     if not (accounts.get("twitch") or accounts.get("kick")):
@@ -680,6 +735,10 @@ async def create_overlay(req: OverlayRequest, request: Request):
         "read_username": req.read_username,
         "max_chars": req.max_chars,
         "cooldown": req.cooldown,
+        "tts_enabled": req.tts_enabled,
+        "read_mode": req.read_mode,
+        "command_prefix": req.command_prefix.strip() or "!tts",
+        "volume": req.volume,
         "enable_twitch": req.enable_twitch,
         "enable_kick": req.enable_kick,
         "enable_youtube": req.enable_youtube,
@@ -707,6 +766,8 @@ async def create_overlay(req: OverlayRequest, request: Request):
             "tiktok_handle": tiktok_handle if tiktok_handle.startswith("@") else f"@{tiktok_handle}",
         })
     existing = overlays.get(key)
+    restart_fields = ("enable_twitch", "enable_kick", "enable_youtube", "enable_tiktok", "channel", "youtube_handle", "tiktok_handle")
+    old_restart_signature = tuple((existing or {}).get(k) for k in restart_fields)
     if existing is None:
         overlays[key] = data
     else:
@@ -716,12 +777,22 @@ async def create_overlay(req: OverlayRequest, request: Request):
 
     storage.save_config(account_id, data)
 
-    # Force currently open OBS sources to reconnect automatically using the same URL.
-    for source in list(overlay_sources.get(key, [])):
-        try:
-            await source.ws.close(code=1012)
-        except Exception:
-            pass
+    new_restart_signature = tuple(data.get(k) for k in restart_fields)
+    sources = list(overlay_sources.get(key, []))
+    if old_restart_signature != new_restart_signature:
+        # Only restart OBS when a reader itself must change (platform/channel/handle).
+        for source in sources:
+            try:
+                await source.ws.close(code=1012)
+            except Exception:
+                pass
+    else:
+        # Voice, filters, volume and mode can update live without changing/reloading the OBS URL.
+        for source in sources:
+            try:
+                await source.send({"type": "settings", "volume": req.volume})
+            except Exception:
+                pass
 
     return {"url": f"{APP_URL}/overlay?key={key}", "key": key, "updated": True}
 
@@ -735,11 +806,25 @@ def sanitize_text(text: str, max_chars: int) -> str:
 
 
 def should_read(data: dict, login: str, message: str, cooldowns: Dict[str, float]) -> str | None:
+    if not data.get("tts_enabled", True):
+        return None
+
     login_l = login.lower()
     if login_l in data["blacklist"]:
         return None
-    if data["ignore_commands"] and message.lstrip().startswith("!"):
+
+    mode = data.get("read_mode", "all")
+    if mode == "command":
+        prefix = (data.get("command_prefix") or "!tts").strip()
+        stripped = message.lstrip()
+        if not stripped.lower().startswith(prefix.lower()):
+            return None
+        message = stripped[len(prefix):].lstrip()
+        if not message:
+            return None
+    elif data["ignore_commands"] and message.lstrip().startswith("!"):
         return None
+
     if data["ignore_urls"] and URL_RE.search(message):
         return None
 
@@ -825,6 +910,7 @@ async def twitch_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str, 
                     "voice": data["voice"],
                     "rate": data["rate"],
                     "pitch": data["pitch"],
+                    "volume": data.get("volume", 100),
                 })
 
 
@@ -1046,6 +1132,7 @@ async def youtube_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str,
                     "voice": data["voice"],
                     "rate": data["rate"],
                     "pitch": data["pitch"],
+                    "volume": data.get("volume", 100),
                 })
 
         wait_ms = max(1000, int(page.get("pollingIntervalMillis") or 5000))
@@ -1098,6 +1185,7 @@ async def tiktok_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str, 
                 "voice": data["voice"],
                 "rate": data["rate"],
                 "pitch": data["pitch"],
+                "volume": data.get("volume", 100),
             })
 
         client.add_listener(CommentEvent, on_comment)
@@ -1181,9 +1269,22 @@ async def overlay_ws(client_ws: WebSocket, key: str):
         if data.get("enable_tiktok"):
             tiktok_task = asyncio.create_task(tiktok_reader_safe(socket, data, tiktok_cooldowns))
 
-        # Browser Source doesn't need to send anything. Waiting here lets us detect disconnects.
         while True:
-            await client_ws.receive_text()
+            raw = await client_ws.receive_text()
+            try:
+                event = json.loads(raw)
+            except Exception:
+                continue
+            if event.get("type") == "client_state":
+                overlay_states[key] = {
+                    "queue_length": max(0, int(event.get("queue_length", 0))),
+                    "speaking": bool(event.get("speaking", False)),
+                    "paused": bool(event.get("paused", False)),
+                    "current": str(event.get("current", ""))[:500],
+                    "platform": str(event.get("platform", ""))[:30],
+                    "volume": max(0, min(100, int(event.get("volume", data.get("volume", 100))))),
+                    "updated_at": int(time.time()),
+                }
     except WebSocketDisconnect:
         pass
     except Exception as exc:
@@ -1217,6 +1318,9 @@ async def overlay_ws(client_ws: WebSocket, key: str):
             sources.remove(socket)
         if not sources:
             overlay_sources.pop(key, None)
+            if key in overlay_states:
+                overlay_states[key]["speaking"] = False
+                overlay_states[key]["online"] = False
         try:
             await client_ws.close()
         except Exception:
@@ -1311,6 +1415,7 @@ async def kick_webhook(request: Request):
                 "voice": data["voice"],
                 "rate": data["rate"],
                 "pitch": data["pitch"],
+                "volume": data.get("volume", 100),
             })
         except Exception:
             dead.append(key)

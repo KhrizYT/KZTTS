@@ -3,108 +3,214 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>KZTTS</title>
+  <meta name="theme-color" content="#080b11" />
+  <title>KZTTS · Dashboard</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <main class="shell">
-    <header>
-      <div>
-        <div class="eyebrow">KZ</div>
-        <h1>KZTTS</h1>
-        <p>TTS multistream desde la nube.</p>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">KZ</div>
+        <div><strong>KZTTS</strong><span>STREAM TTS</span></div>
       </div>
-      <div id="account" class="account">Cargando…</div>
-    </header>
 
-    <section class="card" id="connectionsCard">
-      <h2>1. Conecta tus chats</h2>
-      <div id="dbWarning" class="warning hidden">Falta conectar PostgreSQL en Railway. KZTTS v0.5 usa la base para conservar tu cuenta, tokens, configuración y Browser Source entre deploys.</div>
-      <div class="platform-grid">
-        <div class="platform-card">
-          <div><strong>Twitch</strong><p id="twitchStatus">No conectado</p></div>
-          <a class="btn primary" id="twitchConnect" href="/auth/twitch">Conectar Twitch</a>
+      <nav class="nav" aria-label="Navegación principal">
+        <button class="nav-item active" data-page="home"><span class="nav-icon">⌂</span><span>Resumen</span></button>
+        <button class="nav-item" data-page="platforms"><span class="nav-icon">◉</span><span>Plataformas</span><span id="navPlatformCount" class="nav-count">0</span></button>
+        <button class="nav-item" data-page="tts"><span class="nav-icon">◖</span><span>TTS · Voz</span></button>
+        <button class="nav-item" data-page="filters"><span class="nav-icon">⌁</span><span>Filtros</span></button>
+        <button class="nav-item" data-page="obs"><span class="nav-icon">▣</span><span>OBS</span></button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="mini-status">
+          <span id="sidebarDot" class="status-dot"></span>
+          <div><strong id="sidebarStatus">Cargando</strong><small>Browser Source</small></div>
         </div>
-        <div class="platform-card">
-          <div><strong>Kick</strong><p id="kickStatus">No conectado</p></div>
-          <a class="btn kick" id="kickConnect" href="/auth/kick">Conectar Kick</a>
-        </div>
-        <div class="platform-card youtube-card">
-          <div><strong>YouTube</strong><p id="youtubeStatus">Usa tu @handle</p></div>
-          <input id="youtubeHandle" placeholder="@TuCanal" aria-label="Handle de YouTube" />
-        </div>
-        <div class="platform-card tiktok-card">
-          <div><strong>TikTok</strong><p id="tiktokStatus">Usa tu @usuario</p></div>
-          <input id="tiktokHandle" placeholder="@TuUsuario" aria-label="Usuario de TikTok" />
-          <button class="btn" id="tiktokTestBtn" type="button">Probar TikTok sin LIVE</button>
-          <p class="tiny-note">Simula un comentario en la misma cola de OBS. La vista previa de LIVE Studio no es detectable como LIVE público.</p>
-        </div>
+        <button id="logoutBtn" class="ghost-button">Cerrar sesión</button>
       </div>
-      <div id="kickWarning" class="warning hidden"></div>
-    </section>
+    </aside>
 
-    <section class="card hidden" id="settingsCard">
-      <h2>2. Configura tu TTS</h2>
-
-      <div class="checks platforms">
-        <label><input id="enableTwitch" type="checkbox" /> Twitch</label>
-        <label><input id="enableKick" type="checkbox" /> Kick</label>
-        <label><input id="enableYoutube" type="checkbox" /> YouTube</label>
-        <label><input id="enableTiktok" type="checkbox" /> TikTok</label>
-      </div>
-
-      <div class="grid">
-        <label>Canal de Twitch
-          <input id="channel" placeholder="tu_usuario" />
-        </label>
-        <label>Voz
-          <select id="voice"></select>
-        </label>
-        <label>Velocidad <span id="rateValue">0%</span>
-          <input id="rate" type="range" min="-30" max="30" value="0" />
-        </label>
-        <label>Tono <span id="pitchValue">0Hz</span>
-          <input id="pitch" type="range" min="-30" max="30" value="0" />
-        </label>
-        <label>Máximo de caracteres
-          <input id="maxChars" type="number" min="20" max="400" value="180" />
-        </label>
-        <label>Cooldown por usuario (s)
-          <input id="cooldown" type="number" min="0" max="60" step="0.5" value="2" />
-        </label>
-      </div>
-
-      <div class="checks">
-        <label><input id="ignoreCommands" type="checkbox" checked /> Ignorar comandos (!sens, !rank…)</label>
-        <label><input id="ignoreUrls" type="checkbox" checked /> Ignorar mensajes con links</label>
-        <label><input id="readUsername" type="checkbox" /> Leer nombre del usuario</label>
-      </div>
-
-      <label>Usuarios ignorados (uno por línea)
-        <textarea id="blacklist" rows="7"></textarea>
-      </label>
-
-      <div class="testbox">
-        <input id="testText" value="Khriz, acabas de whiffear otra vez." />
-        <button class="btn" id="testBtn">Probar voz</button>
-      </div>
-
-      <button class="btn primary wide" id="generateBtn">Guardar configuración</button>
-      <div id="sourceBox" class="source hidden">
+    <div class="workspace">
+      <header class="topbar">
         <div>
-          <strong>URL privada para OBS</strong>
-          <p>Esta URL queda ligada a tu cuenta y sobrevive reinicios y deploys. Una sola fuente reproduce Twitch + Kick + YouTube + TikTok. No la compartas.</p>
+          <p class="kicker">KZTTS CLOUD</p>
+          <h1 id="pageTitle">Resumen</h1>
         </div>
-        <input id="sourceUrl" readonly />
-        <button class="btn" id="copyBtn">Copiar</button>
-      </div>
-    </section>
+        <div class="topbar-actions">
+          <div id="saveState" class="save-state"><span></span> Todo guardado</div>
+          <div id="account" class="account-pill">Cargando…</div>
+        </div>
+      </header>
 
-    <section class="card roadmap">
-      <h2>Plataformas</h2>
-      <div class="chips"><span>Twitch ✓</span><span>Kick ✓</span><span>YouTube ✓</span><span>TikTok ✓</span></div>
-    </section>
-  </main>
+      <main class="content">
+        <div id="dbWarning" class="notice warning hidden">Conecta PostgreSQL en Railway para usar la persistencia de KZTTS.</div>
+        <div id="kickWarning" class="notice warning hidden"></div>
+
+        <section class="page active" data-page-panel="home">
+          <div class="hero-grid">
+            <article class="hero-card">
+              <div class="hero-copy">
+                <span class="eyebrow-pill">KZ · MULTISTREAM</span>
+                <h2>Un solo TTS.<br><span>Todos tus chats.</span></h2>
+                <p>Twitch, Kick, YouTube y TikTok llegan a una sola cola y se reproducen en la misma fuente de OBS.</p>
+                <div class="hero-actions">
+                  <button class="primary-button" data-goto="tts">Configurar TTS</button>
+                  <button class="secondary-button" data-goto="obs">Ver fuente de OBS</button>
+                </div>
+              </div>
+              <div class="hero-orbit" aria-hidden="true">
+                <div class="orbit-core">KZ</div>
+                <span class="orbit-node twitch">T</span>
+                <span class="orbit-node kick">K</span>
+                <span class="orbit-node youtube">Y</span>
+                <span class="orbit-node tiktok">♪</span>
+              </div>
+            </article>
+
+            <article class="card live-card">
+              <div class="card-heading">
+                <div><p class="section-label">CONTROL EN VIVO</p><h3>Estado del TTS</h3></div>
+                <span id="runtimeBadge" class="badge neutral">OBS offline</span>
+              </div>
+              <div class="now-playing">
+                <div class="now-icon">◖</div>
+                <div class="now-copy"><small id="nowPlatform">Esperando mensajes</small><strong id="nowMessage">KZTTS está listo</strong></div>
+              </div>
+              <div class="runtime-stats">
+                <div><span id="queueCount">0</span><small>En cola</small></div>
+                <div><span id="runtimeVolume">100%</span><small>Volumen</small></div>
+                <div><span id="runtimeMode">Todo</span><small>Modo</small></div>
+              </div>
+              <div class="control-row">
+                <button id="pauseBtn" class="control-button">Ⅱ <span>Pausar</span></button>
+                <button id="skipBtn" class="control-button">↠ <span>Skip</span></button>
+                <button id="clearBtn" class="control-button danger-soft">× <span>Vaciar</span></button>
+              </div>
+            </article>
+          </div>
+
+          <div class="section-heading"><div><p class="section-label">PLATAFORMAS</p><h2>Chats conectados</h2></div><button class="text-button" data-goto="platforms">Gestionar →</button></div>
+          <div id="homePlatforms" class="platform-summary-grid"></div>
+
+          <div class="two-col-grid dashboard-bottom">
+            <article class="card compact-card">
+              <div class="card-heading"><div><p class="section-label">VOZ ACTUAL</p><h3 id="homeVoiceName">Dalia</h3></div><button class="mini-action" data-goto="tts">Cambiar</button></div>
+              <p id="homeVoiceMeta" class="muted">México · Femenina</p>
+              <div class="voice-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            </article>
+            <article class="card compact-card">
+              <div class="card-heading"><div><p class="section-label">FUENTE OBS</p><h3>Enlace permanente</h3></div><span id="obsMiniBadge" class="badge neutral">Sin fuente</span></div>
+              <p class="muted">Tu URL no cambia al modificar la voz, filtros o plataformas.</p>
+              <button id="homeCopyObs" class="secondary-button full">Copiar enlace de OBS</button>
+            </article>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="platforms">
+          <div class="page-intro"><div><p class="section-label">CONECTA TUS CHATS</p><h2>Plataformas</h2><p>Activa exactamente los chats que quieres enviar a KZTTS.</p></div></div>
+          <div class="platform-grid">
+            <article class="platform-card platform-twitch">
+              <div class="platform-accent"></div>
+              <div class="platform-top"><div class="platform-logo">T</div><label class="switch"><input id="enableTwitch" type="checkbox"><span></span></label></div>
+              <h3>Twitch</h3><p id="twitchStatus">No conectado</p>
+              <div class="platform-footer"><a id="twitchConnect" href="/auth/twitch" class="platform-action">Conectar Twitch</a></div>
+            </article>
+            <article class="platform-card platform-kick">
+              <div class="platform-accent"></div>
+              <div class="platform-top"><div class="platform-logo">K</div><label class="switch"><input id="enableKick" type="checkbox"><span></span></label></div>
+              <h3>Kick</h3><p id="kickStatus">No conectado</p>
+              <div class="platform-footer"><a id="kickConnect" href="/auth/kick" class="platform-action">Conectar Kick</a></div>
+            </article>
+            <article class="platform-card platform-youtube">
+              <div class="platform-accent"></div>
+              <div class="platform-top"><div class="platform-logo">▶</div><label class="switch"><input id="enableYoutube" type="checkbox"><span></span></label></div>
+              <h3>YouTube</h3><p id="youtubeStatus">Usa tu @handle</p>
+              <div class="platform-footer"><input id="youtubeHandle" class="platform-input" placeholder="@TuCanal" aria-label="Handle de YouTube"></div>
+            </article>
+            <article class="platform-card platform-tiktok">
+              <div class="platform-accent"></div>
+              <div class="platform-top"><div class="platform-logo">♪</div><label class="switch"><input id="enableTiktok" type="checkbox"><span></span></label></div>
+              <h3>TikTok</h3><p id="tiktokStatus">Usa tu @usuario</p>
+              <div class="platform-footer stacked"><input id="tiktokHandle" class="platform-input" placeholder="@TuUsuario" aria-label="Usuario de TikTok"><button id="tiktokTestBtn" class="mini-action">Probar sin LIVE</button></div>
+            </article>
+          </div>
+          <article class="card info-card"><span>ⓘ</span><p><strong>TikTok:</strong> el test sin LIVE comprueba la cola y el audio. La conexión real al chat se valida durante un LIVE público.</p></article>
+        </section>
+
+        <section class="page" data-page-panel="tts">
+          <div class="page-intro split"><div><p class="section-label">TTS · VOZ</p><h2>Haz que tu chat suene como quieres</h2><p>Elige voz, modo de lectura y comportamiento. Los cambios se guardan automáticamente.</p></div><label class="master-toggle"><span><strong>Activar TTS</strong><small>Apaga o prende todo el lector</small></span><span class="switch large"><input id="ttsEnabled" type="checkbox" checked><span></span></span></label></div>
+
+          <div class="tts-layout">
+            <div>
+              <div class="section-heading"><div><p class="section-label">VOCES GRATIS</p><h2>Biblioteca de voces</h2></div></div>
+              <div id="voiceCards" class="voice-grid"></div>
+
+              <article class="card test-card">
+                <div><p class="section-label">PRUEBA RÁPIDA</p><h3>Escucha antes de guardar</h3></div>
+                <div class="test-inline"><input id="testText" value="Khriz, acabas de whiffear otra vez."><button id="testBtn" class="primary-button">▶ Probar voz</button></div>
+              </article>
+            </div>
+
+            <aside class="settings-panel card">
+              <p class="section-label">AJUSTES</p>
+              <div class="setting-block">
+                <div class="setting-title"><span>Modo de lectura</span></div>
+                <div class="segmented" id="readModeGroup">
+                  <button data-read-mode="all" class="active">Todo</button>
+                  <button data-read-mode="command">Sólo comando</button>
+                </div>
+                <input id="commandPrefix" class="compact-input hidden" value="!tts" placeholder="!tts">
+              </div>
+              <div class="setting-block"><div class="setting-title"><span>Volumen</span><strong id="volumeValue">100%</strong></div><input id="volume" type="range" min="0" max="100" value="100"></div>
+              <div class="setting-block"><div class="setting-title"><span>Velocidad</span><strong id="rateValue">0%</strong></div><input id="rate" type="range" min="-30" max="30" value="0"></div>
+              <div class="setting-block"><div class="setting-title"><span>Tono</span><strong id="pitchValue">0Hz</strong></div><input id="pitch" type="range" min="-30" max="30" value="0"></div>
+              <div class="setting-block"><label class="field-label">Máximo de caracteres<input id="maxChars" type="number" min="20" max="400" value="180"></label></div>
+              <div class="setting-block"><label class="field-label">Cooldown por usuario<input id="cooldown" type="number" min="0" max="60" step="0.5" value="2"><small>segundos</small></label></div>
+              <div class="setting-block toggle-list"><label><span>Leer nombre del usuario<small>“Fulano dice...”</small></span><span class="switch"><input id="readUsername" type="checkbox"><span></span></span></label></div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="filters">
+          <div class="page-intro"><div><p class="section-label">FILTROS</p><h2>Que el TTS lea lo que sí importa</h2><p>Evita bots, comandos, links y spam antes de que lleguen a la voz.</p></div></div>
+          <div class="two-col-grid">
+            <article class="card filter-card">
+              <div class="filter-row"><div class="filter-icon">!</div><div><strong>Ignorar comandos</strong><p>No leer mensajes como !sens, !rank o !socials.</p></div><label class="switch"><input id="ignoreCommands" type="checkbox" checked><span></span></label></div>
+              <div class="filter-row"><div class="filter-icon">↗</div><div><strong>Ignorar links</strong><p>Bloquea mensajes que contienen URLs.</p></div><label class="switch"><input id="ignoreUrls" type="checkbox" checked><span></span></label></div>
+            </article>
+            <article class="card blacklist-card">
+              <div class="card-heading"><div><p class="section-label">USUARIOS IGNORADOS</p><h3>Blacklist</h3></div><span class="badge good">Bots</span></div>
+              <p class="muted">Uno por línea. Ideal para Nightbot, StreamElements y otros bots.</p>
+              <textarea id="blacklist" rows="10"></textarea>
+            </article>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="obs">
+          <div class="page-intro"><div><p class="section-label">OBS</p><h2>Una fuente. Para siempre.</h2><p>Tu Browser Source está vinculada a tu cuenta y conserva la misma URL aunque cambies la configuración.</p></div></div>
+          <div class="obs-grid">
+            <article class="card obs-main-card">
+              <div class="obs-preview"><div class="obs-logo">KZ</div><div><span id="obsPreviewDot" class="status-dot"></span><strong id="obsPreviewStatus">Esperando OBS</strong><small>KZTTS Browser Source</small></div></div>
+              <label class="field-label">URL privada para OBS<div class="copy-field"><input id="sourceUrl" readonly placeholder="Guarda tu configuración para generar la URL"><button id="copyBtn">Copiar</button></div></label>
+              <div class="obs-steps"><div><span>1</span><p><strong>OBS → Fuentes → Navegador</strong><small>Crea una fuente llamada KZTTS.</small></p></div><div><span>2</span><p><strong>Pega la URL</strong><small>No la compartas: está ligada a tu cuenta.</small></p></div><div><span>3</span><p><strong>Controlar audio mediante OBS</strong><small>Así tendrás el volumen del TTS separado.</small></p></div></div>
+            </article>
+            <aside class="card obs-side-card">
+              <p class="section-label">CONTROL RÁPIDO</p><h3>Prueba tu fuente</h3><p class="muted">Envía un mensaje de prueba por la misma cola que usa el stream.</p>
+              <div class="quick-test-platforms"><button class="test-platform active" data-test-platform="twitch">Twitch</button><button class="test-platform" data-test-platform="kick">Kick</button><button class="test-platform" data-test-platform="youtube">YouTube</button><button class="test-platform" data-test-platform="tiktok">TikTok</button></div>
+              <input id="obsTestText" value="Probando KZTTS desde OBS.">
+              <button id="obsTestBtn" class="primary-button full">Enviar a la cola</button>
+              <button id="generateBtn" class="secondary-button full">Guardar configuración ahora</button>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <select id="voice" class="sr-only" aria-hidden="true"></select>
+  <input id="channel" class="sr-only" aria-hidden="true">
+  <div id="sourceBox" class="sr-only"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>
