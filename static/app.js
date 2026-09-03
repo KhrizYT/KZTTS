@@ -6,6 +6,28 @@ function loadSaved(){
   try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); }
   catch { return {}; }
 }
+
+function cloudToSaved(c){
+  if(!c) return null;
+  return {
+    channel:c.channel || '',
+    youtubeHandle:c.youtube_handle || '',
+    tiktokHandle:c.tiktok_handle || '',
+    voice:c.voice || 'es-MX-DaliaNeural',
+    rate:c.rate ?? 0,
+    pitch:c.pitch ?? 0,
+    maxChars:c.max_chars ?? 180,
+    cooldown:c.cooldown ?? 2,
+    ignoreCommands:c.ignore_commands ?? true,
+    ignoreUrls:c.ignore_urls ?? true,
+    readUsername:c.read_username ?? false,
+    blacklist:Array.isArray(c.blacklist) ? c.blacklist.join('\n') : '',
+    enableTwitch:c.enable_twitch ?? true,
+    enableKick:c.enable_kick ?? false,
+    enableYoutube:c.enable_youtube ?? false,
+    enableTiktok:c.enable_tiktok ?? false,
+  };
+}
 function saveSettings(){
   const data = {
     channel:$('channel').value,
@@ -32,14 +54,25 @@ async function load(){
   const r = await fetch('/api/config');
   config = await r.json();
 
+  const dbWarning = $('dbWarning');
+  if(dbWarning){
+    dbWarning.classList.toggle('hidden', config.database_configured !== false);
+  }
+
   $('twitchStatus').textContent = config.twitch_connected ? `● ${config.twitch_account}` : 'No conectado';
   $('kickStatus').textContent = config.kick_connected ? `● ${config.kick_account}` : (config.kick_configured ? 'No conectado' : 'Falta configurar servidor');
   $('youtubeStatus').textContent = config.youtube_configured ? 'Usa tu @handle' : 'Falta configurar servidor';
   $('tiktokStatus').textContent = config.tiktok_configured ? 'Usa tu @usuario' : 'TikTok no disponible';
   $('twitchConnect').textContent = config.twitch_connected ? 'Reconectar' : 'Conectar Twitch';
   $('kickConnect').textContent = config.kick_connected ? 'Reconectar' : 'Conectar Kick';
-  $('kickConnect').classList.toggle('disabled', !config.kick_configured);
-  if(!config.kick_configured) $('kickConnect').onclick = e => { e.preventDefault(); alert('Primero agrega KICK_CLIENT_ID y KICK_CLIENT_SECRET en Railway.'); };
+  $('kickConnect').classList.toggle('disabled', !config.kick_configured || config.database_configured === false);
+  $('twitchConnect').classList.toggle('disabled', config.database_configured === false);
+  if(config.database_configured === false){
+    $('twitchConnect').onclick = e => { e.preventDefault(); alert('Primero conecta PostgreSQL a KZTTS en Railway.'); };
+    $('kickConnect').onclick = e => { e.preventDefault(); alert('Primero conecta PostgreSQL a KZTTS en Railway.'); };
+  }else if(!config.kick_configured){
+    $('kickConnect').onclick = e => { e.preventDefault(); alert('Primero agrega KICK_CLIENT_ID y KICK_CLIENT_SECRET en Railway.'); };
+  }
   $('youtubeHandle').disabled = !config.youtube_configured;
   if(!config.youtube_configured) $('youtubeHandle').placeholder = 'Falta YOUTUBE_API_KEY';
   $('tiktokHandle').disabled = !config.tiktok_configured;
@@ -64,7 +97,8 @@ async function load(){
     $('voice').appendChild(option);
   }
 
-  const saved = loadSaved();
+  // Prefer the cloud copy. localStorage is only a one-time migration/fallback from v0.4.
+  const saved = cloudToSaved(config.saved_settings) || loadSaved();
   $('channel').value = saved.channel || config.twitch_account || '';
   $('youtubeHandle').value = saved.youtubeHandle || '@KhrizYT';
   $('tiktokHandle').value = saved.tiktokHandle || '';
@@ -87,6 +121,11 @@ async function load(){
   $('enableTiktok').disabled = !config.tiktok_configured || !$('tiktokHandle').value.trim();
   $('rateValue').textContent = `${$('rate').value}%`;
   $('pitchValue').textContent = `${$('pitch').value}Hz`;
+
+  if(config.overlay_configured && config.overlay_url){
+    $('sourceUrl').value = config.overlay_url;
+    $('sourceBox').classList.remove('hidden');
+  }
 }
 
 $('rate').oninput = () => { $('rateValue').textContent = `${$('rate').value}%`; saveSettings(); };
@@ -148,7 +187,11 @@ $('generateBtn').onclick = async () => {
   $('sourceUrl').value = data.url;
   config.overlay_key = data.key;
   config.overlay_url = data.url;
+  config.overlay_configured = true;
   $('sourceBox').classList.remove('hidden');
+  const old = $('generateBtn').textContent;
+  $('generateBtn').textContent = 'Guardado en la nube ✓';
+  setTimeout(()=>$('generateBtn').textContent=old, 1600);
 };
 
 $('copyBtn').onclick = async () => {

@@ -1,30 +1,22 @@
-# KZTTS v0.4.1
+# KZTTS v0.5 — persistencia real
 
-TTS multistream cloud para Twitch, Kick, YouTube y TikTok.
+Esta versión convierte el prototipo en una app persistente:
 
-## v0.4.1
-- TikTok LIVE por `@usuario` usando TikTokLive 7.0.0 (sin login de TikTok).
-- Browser Source estable por cuenta: guardar cambios reutiliza la misma URL.
-- Al guardar cambios, la Browser Source abierta se reconecta sola con la nueva configuración.
-- Twitch + Kick + YouTube + TikTok comparten filtros, voz y cola.
+- PostgreSQL guarda la cuenta KZTTS y la configuración del TTS.
+- Los tokens OAuth de Twitch/Kick se guardan cifrados usando una clave derivada de `SESSION_SECRET`.
+- Twitch/Kick siguen conectados después de un redeploy (salvo que el proveedor revoque/caduque el token).
+- La Browser Source se guarda en la cuenta y conserva la misma URL entre deploys.
+- Voz, velocidad, tono, blacklist, cooldown, plataformas, @YouTube y @TikTok se guardan en la nube.
+- La configuración de localStorage de v0.4 se usa como migración si todavía no existe una copia cloud.
 
 ## Railway
-Conserva las variables ya existentes:
-- APP_URL
-- SESSION_SECRET (NO cambiar; también mantiene estable la URL de OBS)
-- TWITCH_CLIENT_ID
-- TWITCH_CLIENT_SECRET
-- KICK_CLIENT_ID
-- KICK_CLIENT_SECRET
-- YOUTUBE_API_KEY
 
-No hay variables nuevas para TikTok.
+1. Añade un servicio PostgreSQL al mismo proyecto.
+2. En el servicio `kztts` agrega una Reference Variable:
+   `DATABASE_URL=${{Postgres.DATABASE_URL}}`
+3. Mantén `SESSION_SECRET` exactamente igual. Si lo cambias, las sesiones y los tokens cifrados anteriores dejan de poder recuperarse.
+4. Redeploy.
+5. Reconecta Twitch y Kick una última vez para migrarlos a la base.
+6. Pulsa **Guardar configuración**. Desde ahí la configuración y la URL quedan persistentes.
 
-## Nota TikTok
-TikTok no ofrece una API pública oficial para leer los comentarios de LIVE. Esta versión usa TikTokLive, un cliente comunitario/no oficial. Puede requerir cambios si TikTok modifica su protocolo.
-
-
-## v0.4.1
-- Botón **Probar TikTok sin LIVE**: inyecta un comentario simulado en la misma cola y Browser Source de OBS.
-- Aclara que la vista previa de TikTok LIVE Studio no aparece como un LIVE público para TikTokLive.
-- No cambia la URL fija de OBS.
+No pongas `DATABASE_URL` ni ningún secret en GitHub.

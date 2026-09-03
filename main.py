@@ -24,6 +24,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
+import storage
+
 try:
     from TikTokLive import TikTokLiveClient
     from TikTokLive.events import CommentEvent
@@ -42,7 +44,7 @@ KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
-app = FastAPI(title="KZTTS", version="0.4.1")
+app = FastAPI(title="KZTTS", version="0.5.0")
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -53,8 +55,6 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 # Runtime overlay configs. The overlay key itself is stable per account, so changing settings no longer changes the OBS URL.
 overlays: Dict[str, dict] = {}
-# Auth tokens stay server-side; the browser cookie contains only a random session id.
-account_sessions: Dict[str, dict] = {}
 # Active OBS Browser Sources. Updating settings restarts these sockets automatically,
 # so OBS keeps the exact same URL and reconnects with the new configuration.
 overlay_sources: Dict[str, list["OverlaySocket"]] = {}
@@ -174,30 +174,26 @@ def tiktok_configured() -> bool:
     return TIKTOKLIVE_AVAILABLE
 
 
-def stable_overlay_key(accounts: dict) -> str:
-    """Return a private deterministic OBS key for this signed-in KZTTS account."""
-    twitch = accounts.get("twitch") or {}
-    kick = accounts.get("kick") or {}
-    if twitch.get("login"):
-        identity = f"twitch:{twitch['login'].lower()}"
-    elif kick.get("user_id") is not None:
-        identity = f"kick:{kick['user_id']}"
-    else:
-        raise HTTPException(status_code=401, detail="Inicia sesión con Twitch o Kick primero")
+def legacy_overlay_key(identity: str) -> str:
+    """v0.4-compatible key so an existing OBS URL can survive the DB migration."""
     digest = hmac.new(SESSION_SECRET.encode(), f"kztts-overlay:{identity}".encode(), hashlib.sha256).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
-def get_accounts(request: Request, create: bool = False) -> dict:
-    sid = request.session.get("sid")
-    if sid and sid in account_sessions:
-        return account_sessions[sid]
-    if not create:
-        return {}
-    sid = secrets.token_urlsafe(24)
-    request.session["sid"] = sid
-    account_sessions[sid] = {}
-    return account_sessions[sid]
+def get_account_id(request: Request, required: bool = False) -> str | None:
+    account_id = request.session.get("account_id")
+    if account_id and storage.get_account(account_id):
+        return account_id
+    if account_id:
+        request.session.pop("account_id", None)
+    if required:
+        raise HTTPException(status_code=401, detail="Inicia sesión con Twitch o Kick primero")
+    return None
+
+
+def get_accounts(request: Request) -> dict:
+    account_id = get_account_id(request)
+    return storage.list_providers(account_id) if account_id else {}
 
 
 def require_twitch_session(request: Request) -> dict:
@@ -212,6 +208,78 @@ def require_kick_session(request: Request) -> dict:
     if not account:
         raise HTTPException(status_code=401, detail="Kick no conectado")
     return account
+
+
+def attach_provider(
+    request: Request,
+    provider: str,
+    provider_user_id: str,
+    login: str,
+    display_name: str,
+    access_token: str,
+    refresh_token: str,
+    metadata: dict | None = None,
+) -> str:
+    if not storage.database_configured():
+        raise HTTPException(status_code=500, detail="Falta DATABASE_URL (PostgreSQL) en Railway")
+
+    current = get_account_id(request)
+    existing = storage.find_account_by_provider(provider, str(provider_user_id))
+    if existing:
+        account_id = existing
+    elif current:
+        account_id = current
+    else:
+        identity = f"twitch:{login.lower()}" if provider == "twitch" else f"kick:{provider_user_id}"
+        account_id = storage.create_account(legacy_overlay_key(identity))["id"]
+
+    # Migration: v0.4 preferred Twitch when both were connected. Before the first
+    # cloud config is saved, linking Twitch is allowed to adopt that old key.
+    if provider == "twitch" and not storage.account_has_config(account_id):
+        try:
+            storage.set_overlay_key(account_id, legacy_overlay_key(f"twitch:{login.lower()}"))
+        except Exception:
+            pass
+
+    storage.upsert_provider(
+        account_id=account_id,
+        provider=provider,
+        provider_user_id=str(provider_user_id),
+        login=login,
+        display_name=display_name,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        metadata=metadata or {},
+    )
+    request.session["account_id"] = account_id
+    return account_id
+
+
+def account_overlay_key(request: Request) -> str:
+    account_id = get_account_id(request, required=True)
+    account = storage.get_account(account_id)
+    if not account:
+        raise HTTPException(status_code=401, detail="Cuenta KZTTS no encontrada")
+    return account["overlay_key"]
+
+
+def load_overlay_data(key: str) -> dict | None:
+    data = overlays.get(key)
+    if data is not None:
+        return data
+    row = storage.get_config_by_overlay_key(key) if storage.database_configured() else None
+    if not row:
+        return None
+    account_id, data = row
+    data["account_id"] = account_id
+    overlays[key] = data
+    return data
+
+
+@app.on_event("startup")
+async def init_persistent_storage():
+    if storage.database_configured():
+        await asyncio.to_thread(storage.init_db)
 
 
 async def twitch_validate(access_token: str) -> bool:
@@ -276,16 +344,16 @@ async def overlay_page():
 
 @app.get("/api/config")
 async def config(request: Request):
-    accounts = get_accounts(request)
+    db_ok = storage.database_configured()
+    account_id = get_account_id(request) if db_ok else None
+    accounts = storage.list_providers(account_id) if account_id else {}
     twitch = accounts.get("twitch") or {}
     kick = accounts.get("kick") or {}
-    overlay_key = None
-    if twitch or kick:
-        try:
-            overlay_key = stable_overlay_key(accounts)
-        except Exception:
-            overlay_key = None
+    account = storage.get_account(account_id) if account_id else None
+    overlay_key = account.get("overlay_key") if account else None
+    saved = storage.get_config(account_id) if account_id else None
     return {
+        "database_configured": db_ok,
         "twitch_configured": twitch_configured(),
         "kick_configured": kick_configured(),
         "twitch_connected": bool(twitch),
@@ -293,7 +361,7 @@ async def config(request: Request):
         "youtube_configured": youtube_configured(),
         "tiktok_configured": tiktok_configured(),
         "twitch_account": twitch.get("display_name"),
-        "kick_account": kick.get("name") or kick.get("slug"),
+        "kick_account": kick.get("name") or kick.get("display_name") or kick.get("slug"),
         "kick_subscription_ok": kick.get("subscription_ok", False),
         "kick_subscription_error": kick.get("subscription_error", ""),
         "voices": VOICE_OPTIONS,
@@ -301,13 +369,16 @@ async def config(request: Request):
         "app_url": APP_URL,
         "overlay_key": overlay_key,
         "overlay_url": f"{APP_URL}/overlay?key={overlay_key}" if overlay_key else None,
-        "overlay_configured": bool(overlay_key and overlay_key in overlays),
+        "overlay_configured": bool(saved),
+        "saved_settings": saved,
         "kick_webhook_url": f"{APP_URL}/webhooks/kick",
     }
 
 
 @app.get("/auth/twitch")
 async def twitch_login(request: Request):
+    if not storage.database_configured():
+        raise HTTPException(status_code=500, detail="Falta DATABASE_URL (PostgreSQL) en Railway")
     if not twitch_configured():
         raise HTTPException(status_code=500, detail="Faltan TWITCH_CLIENT_ID y TWITCH_CLIENT_SECRET")
     state = secrets.token_urlsafe(24)
@@ -354,18 +425,23 @@ async def twitch_callback(request: Request, code: str, state: str):
         user_r.raise_for_status()
         user = user_r.json()["data"][0]
 
-    get_accounts(request, create=True)["twitch"] = {
-        "login": user["login"],
-        "display_name": user["display_name"],
-        "access_token": access_token,
-        "refresh_token": token_data.get("refresh_token", ""),
-    }
+    attach_provider(
+        request=request,
+        provider="twitch",
+        provider_user_id=user["id"],
+        login=user["login"],
+        display_name=user["display_name"],
+        access_token=access_token,
+        refresh_token=token_data.get("refresh_token", ""),
+    )
     request.session.pop("twitch_oauth_state", None)
     return RedirectResponse("/")
 
 
 @app.get("/auth/kick")
 async def kick_login(request: Request):
+    if not storage.database_configured():
+        raise HTTPException(status_code=500, detail="Falta DATABASE_URL (PostgreSQL) en Railway")
     if not kick_configured():
         raise HTTPException(status_code=500, detail="Faltan KICK_CLIENT_ID y KICK_CLIENT_SECRET")
     state = secrets.token_urlsafe(24)
@@ -446,7 +522,22 @@ async def kick_callback(request: Request, code: str, state: str):
     except Exception as exc:
         kick_data["subscription_error"] = str(exc)
 
-    get_accounts(request, create=True)["kick"] = kick_data
+    attach_provider(
+        request=request,
+        provider="kick",
+        provider_user_id=str(kick_data["user_id"]),
+        login=kick_data.get("slug") or kick_data.get("name") or str(kick_data["user_id"]),
+        display_name=kick_data.get("name") or kick_data.get("slug") or str(kick_data["user_id"]),
+        access_token=kick_data["access_token"],
+        refresh_token=kick_data.get("refresh_token", ""),
+        metadata={
+            "name": kick_data.get("name", ""),
+            "slug": kick_data.get("slug", ""),
+            "subscription_ok": kick_data.get("subscription_ok", False),
+            "subscription_error": kick_data.get("subscription_error", ""),
+            "subscription": kick_data.get("subscription"),
+        },
+    )
     request.session.pop("kick_oauth_state", None)
     request.session.pop("kick_pkce_verifier", None)
     return RedirectResponse("/")
@@ -454,9 +545,8 @@ async def kick_callback(request: Request, code: str, state: str):
 
 @app.post("/auth/logout")
 async def logout(request: Request):
-    sid = request.session.get("sid")
-    if sid:
-        account_sessions.pop(sid, None)
+    # Logout clears only this browser session. Cloud settings/tokens remain so the
+    # same Twitch/Kick account can recover them on the next login.
     request.session.clear()
     return {"ok": True}
 
@@ -469,7 +559,7 @@ async def tts(req: TTSRequest, request: Request):
     accounts = get_accounts(request)
     authorized = bool(accounts.get("twitch") or accounts.get("kick"))
     if req.overlay_key:
-        authorized = req.overlay_key in overlays
+        authorized = load_overlay_data(req.overlay_key) is not None
     if not authorized:
         raise HTTPException(status_code=401, detail="No autorizado")
 
@@ -502,8 +592,8 @@ async def test_message(req: TestMessageRequest, request: Request):
     if not (accounts.get("twitch") or accounts.get("kick")):
         raise HTTPException(status_code=401, detail="Inicia sesión con Twitch o Kick primero")
 
-    key = (req.overlay_key or "").strip() or stable_overlay_key(accounts)
-    data = overlays.get(key)
+    key = (req.overlay_key or "").strip() or account_overlay_key(request)
+    data = load_overlay_data(key)
     if not data:
         raise HTTPException(status_code=400, detail="Primero guarda / actualiza la Browser Source")
 
@@ -577,12 +667,10 @@ async def create_overlay(req: OverlayRequest, request: Request):
             detail=f"Kick conectado, pero falta la suscripción al chat: {kick.get('subscription_error') or 'reconecta Kick'}",
         )
 
-    requested_key = (req.overlay_key or "").strip()
-    if requested_key and re.fullmatch(r"[A-Za-z0-9_-]{24,100}", requested_key):
-        key = requested_key
-    else:
-        key = stable_overlay_key(accounts)
+    account_id = get_account_id(request, required=True)
+    key = account_overlay_key(request)
     data = {
+        "account_id": account_id,
         "voice": req.voice,
         "rate": req.rate,
         "pitch": req.pitch,
@@ -602,8 +690,6 @@ async def create_overlay(req: OverlayRequest, request: Request):
         data.update({
             "owner": twitch["login"],
             "channel": (req.channel or twitch["login"]).lower().lstrip("#"),
-            "twitch_access_token": twitch["access_token"],
-            "twitch_refresh_token": twitch.get("refresh_token", ""),
             "twitch_login": twitch["login"],
         })
     if kick:
@@ -627,6 +713,8 @@ async def create_overlay(req: OverlayRequest, request: Request):
         existing.clear()
         existing.update(data)
         data = existing
+
+    storage.save_config(account_id, data)
 
     # Force currently open OBS sources to reconnect automatically using the same URL.
     for source in list(overlay_sources.get(key, [])):
@@ -685,11 +773,21 @@ def parse_irc_privmsg(line: str):
 
 
 async def ensure_overlay_twitch_token(data: dict):
-    if await twitch_validate(data["twitch_access_token"]):
+    account_id = data.get("account_id")
+    providers = storage.list_providers(account_id) if account_id else {}
+    twitch = providers.get("twitch") or {}
+    access_token = twitch.get("access_token", "")
+    refresh_token = twitch.get("refresh_token", "")
+    if not access_token:
+        raise RuntimeError("Twitch no está conectado a esta cuenta KZTTS")
+    if await twitch_validate(access_token):
+        data["twitch_access_token"] = access_token
+        data["twitch_refresh_token"] = refresh_token
         return
-    if not data.get("twitch_refresh_token"):
-        raise RuntimeError("Token de Twitch vencido; vuelve a generar la fuente")
-    access, refresh = await twitch_refresh(data["twitch_refresh_token"])
+    if not refresh_token:
+        raise RuntimeError("Token de Twitch vencido; reconecta Twitch")
+    access, refresh = await twitch_refresh(refresh_token)
+    storage.update_provider_tokens(account_id, "twitch", access, refresh)
     data["twitch_access_token"] = access
     data["twitch_refresh_token"] = refresh
 
@@ -1058,7 +1156,7 @@ async def tiktok_reader_safe(socket: OverlaySocket, data: dict, cooldowns: Dict[
 @app.websocket("/ws/overlay")
 async def overlay_ws(client_ws: WebSocket, key: str):
     await client_ws.accept()
-    data = overlays.get(key)
+    data = load_overlay_data(key)
     if not data:
         await client_ws.send_json({"type": "error", "message": "Fuente inválida o expirada"})
         await client_ws.close(code=1008)
@@ -1195,7 +1293,7 @@ async def kick_webhook(request: Request):
     targets = list((kick_clients.get(broadcaster_id) or {}).items())
     dead = []
     for key, socket in targets:
-        data = overlays.get(key)
+        data = load_overlay_data(key)
         if not data:
             dead.append(key)
             continue

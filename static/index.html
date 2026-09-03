@@ -19,6 +19,7 @@
 
     <section class="card" id="connectionsCard">
       <h2>1. Conecta tus chats</h2>
+      <div id="dbWarning" class="warning hidden">Falta conectar PostgreSQL en Railway. KZTTS v0.5 usa la base para conservar tu cuenta, tokens, configuración y Browser Source entre deploys.</div>
       <div class="platform-grid">
         <div class="platform-card">
           <div><strong>Twitch</strong><p id="twitchStatus">No conectado</p></div>
@@ -88,11 +89,11 @@
         <button class="btn" id="testBtn">Probar voz</button>
       </div>
 
-      <button class="btn primary wide" id="generateBtn">Guardar / actualizar Browser Source</button>
+      <button class="btn primary wide" id="generateBtn">Guardar configuración</button>
       <div id="sourceBox" class="source hidden">
         <div>
           <strong>URL privada para OBS</strong>
-          <p>Esta URL es fija. Una sola fuente reproduce Twitch + Kick + YouTube + TikTok. No la compartas.</p>
+          <p>Esta URL queda ligada a tu cuenta y sobrevive reinicios y deploys. Una sola fuente reproduce Twitch + Kick + YouTube + TikTok. No la compartas.</p>
         </div>
         <input id="sourceUrl" readonly />
         <button class="btn" id="copyBtn">Copiar</button>
