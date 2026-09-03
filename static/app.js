@@ -171,4 +171,35 @@ $('tiktokHandle').addEventListener('input', () => {
   saveSettings();
 });
 
+$('tiktokTestBtn').onclick = async () => {
+  const btn = $('tiktokTestBtn');
+  if(!config?.overlay_key){
+    alert('Primero marca TikTok y pulsa “Guardar / actualizar Browser Source”.');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Enviando…';
+  try{
+    const r = await fetch('/api/test-message', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        platform:'tiktok',
+        user:'PruebaTikTok',
+        text:'probando KZTTS desde TikTok',
+        overlay_key:config.overlay_key
+      })
+    });
+    const data = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(data.detail || 'No se pudo enviar la prueba');
+    btn.textContent = 'Enviado ✓';
+    setTimeout(()=>btn.textContent='Probar TikTok sin LIVE',1400);
+  }catch(e){
+    alert(e.message);
+    btn.textContent = 'Probar TikTok sin LIVE';
+  }finally{
+    btn.disabled = false;
+  }
+};
+
 load();

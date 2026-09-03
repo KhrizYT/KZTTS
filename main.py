@@ -42,7 +42,7 @@ KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
-app = FastAPI(title="KZTTS", version="0.4.0")
+app = FastAPI(title="KZTTS", version="0.4.1")
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -129,6 +129,13 @@ class TTSRequest(BaseModel):
     rate: int = Field(default=0, ge=-50, le=50)
     pitch: int = Field(default=0, ge=-50, le=50)
     overlay_key: str | None = None
+
+
+class TestMessageRequest(BaseModel):
+    platform: str = Field(default="tiktok", max_length=20)
+    text: str = Field(default="probando KZTTS desde TikTok", min_length=1, max_length=400)
+    user: str = Field(default="PruebaTikTok", min_length=1, max_length=100)
+    overlay_key: str | None = Field(default=None, max_length=100)
 
 
 class OverlayRequest(BaseModel):
@@ -487,6 +494,55 @@ async def tts(req: TTSRequest, request: Request):
     if not chunks:
         raise HTTPException(status_code=502, detail="No se recibió audio")
     return Response(content=b"".join(chunks), media_type="audio/mpeg")
+
+
+@app.post("/api/test-message")
+async def test_message(req: TestMessageRequest, request: Request):
+    accounts = get_accounts(request)
+    if not (accounts.get("twitch") or accounts.get("kick")):
+        raise HTTPException(status_code=401, detail="Inicia sesión con Twitch o Kick primero")
+
+    key = (req.overlay_key or "").strip() or stable_overlay_key(accounts)
+    data = overlays.get(key)
+    if not data:
+        raise HTTPException(status_code=400, detail="Primero guarda / actualiza la Browser Source")
+
+    platform = req.platform.lower().strip()
+    if platform not in {"twitch", "kick", "youtube", "tiktok"}:
+        raise HTTPException(status_code=400, detail="Plataforma no válida")
+    if not data.get(f"enable_{platform}"):
+        raise HTTPException(status_code=400, detail=f"Activa {platform.title()} y guarda la Browser Source primero")
+
+    sockets = list(overlay_sources.get(key, []))
+    if not sockets:
+        raise HTTPException(status_code=409, detail="La Browser Source no está abierta en OBS")
+
+    login = req.user.strip() or "PruebaTikTok"
+    cooldowns = data.setdefault(f"{platform}_test_cooldowns", {})
+    clean = should_read(data, login, req.text, cooldowns)
+    if not clean:
+        raise HTTPException(status_code=400, detail="El mensaje de prueba fue bloqueado por tus filtros o cooldown")
+    spoken = f"{login} dice: {clean}" if data["read_username"] else clean
+
+    payload = {
+        "type": "message",
+        "platform": platform,
+        "user": login,
+        "text": spoken,
+        "voice": data["voice"],
+        "rate": data["rate"],
+        "pitch": data["pitch"],
+    }
+    sent = 0
+    for socket in sockets:
+        try:
+            await socket.send(payload)
+            sent += 1
+        except Exception:
+            pass
+    if not sent:
+        raise HTTPException(status_code=409, detail="No pude enviar el mensaje a OBS")
+    return {"ok": True, "sent": sent}
 
 
 @app.post("/api/overlay")
@@ -954,7 +1010,7 @@ async def tiktok_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str, 
                     await socket.send({
                         "type": "status",
                         "platform": "tiktok",
-                        "message": f"TikTok {handle}: esperando un LIVE activo",
+                        "message": f"TikTok {handle}: esperando un LIVE público (la vista previa de LIVE Studio no cuenta)",
                     })
                     waiting_sent = True
                 await asyncio.sleep(15)
