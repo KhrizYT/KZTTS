@@ -1,54 +1,34 @@
-# KZTTS v0.1
+# KZTTS v0.2
 
-Primer MVP web de KZTTS:
+Cloud TTS for streams. Twitch + Kick feed one OBS Browser Source.
 
-- Login OAuth con Twitch (`chat:read` para el lector IRC del MVP).
-- Lee el chat de Twitch desde el servidor.
-- TTS gratuito con Microsoft Edge TTS (`es-MX-DaliaNeural` por defecto).
-- Voces mexicanas seleccionables.
-- Blacklist de usuarios/bots (Nightbot, StreamElements, etc.).
-- Ignorar comandos y links.
-- Cooldown por usuario.
-- Cola de reproducción en una Browser Source de OBS.
-- Sin programa de escritorio ni Social Stream Ninja.
+## Railway variables
 
-## Importante
+- `APP_URL`
+- `SESSION_SECRET`
+- `TWITCH_CLIENT_ID`
+- `TWITCH_CLIENT_SECRET`
+- `KICK_CLIENT_ID`
+- `KICK_CLIENT_SECRET`
 
-La v0.1 usa Twitch IRC para simplificar el primer despliegue. Twitch recomienda EventSub para implementaciones nuevas; la migración a EventSub queda prevista para la siguiente versión.
-
-Edge TTS usa el servicio online de lectura de Microsoft Edge mediante una integración comunitaria no oficial. No necesita API key ni cobra por carácter, pero Microsoft puede cambiar el servicio. KZTTS está estructurado para cambiar de motor después sin reescribir el sistema de chats.
-
-## Ejecutar
-
-1. Crea una app en Twitch Developer Console.
-2. Callback OAuth: `http://localhost:8000/auth/twitch/callback` para pruebas o `https://TU-DOMINIO/auth/twitch/callback` al desplegar.
-3. Copia `.env.example` a `.env` y rellena las variables.
-4. Instala dependencias:
+Start command on Railway:
 
 ```bash
-pip install -r requirements.txt
+sh -c 'uvicorn main:app --host 0.0.0.0 --port "$PORT"'
 ```
 
-5. Inicia:
+## Twitch app
+Redirect URL:
+`<APP_URL>/auth/twitch/callback`
 
-```bash
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
+## Kick app
+Redirect URL:
+`<APP_URL>/auth/kick/callback`
 
-## OBS
+Webhook URL:
+`<APP_URL>/webhooks/kick`
 
-En el dashboard pulsa **Generar Browser Source**, copia la URL privada y crea una fuente `Browser` en OBS con esa URL. Activa la opción de controlar el audio mediante OBS si quieres manejar KZTTS como canal independiente.
+Requested Kick scopes: `user:read channel:read events:subscribe`.
 
-## Despliegue online
-
-El proyecto funciona en cualquier host Python que soporte WebSockets (Render, Railway, Fly.io, VPS, etc.). Para v0.1 los datos de las fuentes viven en memoria: si el servidor reinicia, genera una nueva URL. En v0.2 se migrarán cuentas/configuración a Postgres/Supabase.
-
-## Siguiente versión
-
-- Persistencia Postgres/Supabase.
-- Kick.
-- YouTube Live.
-- TikTok Live.
-- Panel de cola: skip / clear / mute.
-- Diccionario de pronunciaciones.
-- Filtros antispam más avanzados.
+## Note
+Overlay keys are still in RAM in v0.2. After a Railway restart/redeploy, regenerate the Browser Source URL. Dashboard TTS preferences are saved in browser localStorage.

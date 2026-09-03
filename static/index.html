@@ -12,19 +12,34 @@
       <div>
         <div class="eyebrow">KZ</div>
         <h1>KZTTS</h1>
-        <p>TTS multistream. Empezamos con Twitch.</p>
+        <p>TTS multistream desde la nube.</p>
       </div>
-      <div id="account" class="account"></div>
+      <div id="account" class="account">Cargando…</div>
     </header>
 
-    <section class="card" id="loginCard">
-      <h2>1. Conecta Twitch</h2>
-      <p>El chat se escucha desde la nube. No necesitas tener otra app abierta.</p>
-      <a class="btn primary" href="/auth/twitch">Conectar con Twitch</a>
+    <section class="card" id="connectionsCard">
+      <h2>1. Conecta tus chats</h2>
+      <div class="platform-grid">
+        <div class="platform-card">
+          <div><strong>Twitch</strong><p id="twitchStatus">No conectado</p></div>
+          <a class="btn primary" id="twitchConnect" href="/auth/twitch">Conectar Twitch</a>
+        </div>
+        <div class="platform-card">
+          <div><strong>Kick</strong><p id="kickStatus">No conectado</p></div>
+          <a class="btn kick" id="kickConnect" href="/auth/kick">Conectar Kick</a>
+        </div>
+      </div>
+      <div id="kickWarning" class="warning hidden"></div>
     </section>
 
     <section class="card hidden" id="settingsCard">
       <h2>2. Configura tu TTS</h2>
+
+      <div class="checks platforms">
+        <label><input id="enableTwitch" type="checkbox" /> Twitch</label>
+        <label><input id="enableKick" type="checkbox" /> Kick</label>
+      </div>
+
       <div class="grid">
         <label>Canal de Twitch
           <input id="channel" placeholder="tu_usuario" />
@@ -61,11 +76,11 @@
         <button class="btn" id="testBtn">Probar voz</button>
       </div>
 
-      <button class="btn primary wide" id="generateBtn">Generar Browser Source</button>
+      <button class="btn primary wide" id="generateBtn">Generar Browser Source multistream</button>
       <div id="sourceBox" class="source hidden">
         <div>
           <strong>URL privada para OBS</strong>
-          <p>Pégala como Browser Source. No la compartas.</p>
+          <p>Una sola fuente reproduce Twitch + Kick. No la compartas.</p>
         </div>
         <input id="sourceUrl" readonly />
         <button class="btn" id="copyBtn">Copiar</button>
@@ -73,8 +88,8 @@
     </section>
 
     <section class="card roadmap">
-      <h2>Siguiente</h2>
-      <div class="chips"><span>Twitch ✓</span><span>Kick</span><span>YouTube</span><span>TikTok</span></div>
+      <h2>Plataformas</h2>
+      <div class="chips"><span>Twitch ✓</span><span>Kick ✓</span><span>YouTube</span><span>TikTok</span></div>
     </section>
   </main>
   <script src="/static/app.js"></script>
