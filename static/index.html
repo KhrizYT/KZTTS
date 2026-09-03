@@ -28,6 +28,10 @@
           <div><strong>Kick</strong><p id="kickStatus">No conectado</p></div>
           <a class="btn kick" id="kickConnect" href="/auth/kick">Conectar Kick</a>
         </div>
+        <div class="platform-card">
+          <div><strong>YouTube</strong><p id="youtubeStatus">No conectado</p></div>
+          <a class="btn youtube" id="youtubeConnect" href="/auth/youtube">Conectar YouTube</a>
+        </div>
       </div>
       <div id="kickWarning" class="warning hidden"></div>
     </section>
@@ -38,6 +42,7 @@
       <div class="checks platforms">
         <label><input id="enableTwitch" type="checkbox" /> Twitch</label>
         <label><input id="enableKick" type="checkbox" /> Kick</label>
+        <label><input id="enableYoutube" type="checkbox" /> YouTube</label>
       </div>
 
       <div class="grid">
@@ -80,7 +85,7 @@
       <div id="sourceBox" class="source hidden">
         <div>
           <strong>URL privada para OBS</strong>
-          <p>Una sola fuente reproduce Twitch + Kick. No la compartas.</p>
+          <p>Una sola fuente reproduce Twitch + Kick + YouTube. No la compartas.</p>
         </div>
         <input id="sourceUrl" readonly />
         <button class="btn" id="copyBtn">Copiar</button>
@@ -89,7 +94,7 @@
 
     <section class="card roadmap">
       <h2>Plataformas</h2>
-      <div class="chips"><span>Twitch ✓</span><span>Kick ✓</span><span>YouTube</span><span>TikTok</span></div>
+      <div class="chips"><span>Twitch ✓</span><span>Kick ✓</span><span>YouTube ✓</span><span>TikTok</span></div>
     </section>
   </main>
   <script src="/static/app.js"></script>
