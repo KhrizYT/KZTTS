@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KZTTS</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <div class="eyebrow">KZ</div>
+        <h1>KZTTS</h1>
+        <p>TTS multistream. Empezamos con Twitch.</p>
+      </div>
+      <div id="account" class="account"></div>
+    </header>
+
+    <section class="card" id="loginCard">
+      <h2>1. Conecta Twitch</h2>
+      <p>El chat se escucha desde la nube. No necesitas tener otra app abierta.</p>
+      <a class="btn primary" href="/auth/twitch">Conectar con Twitch</a>
+    </section>
+
+    <section class="card hidden" id="settingsCard">
+      <h2>2. Configura tu TTS</h2>
+      <div class="grid">
+        <label>Canal de Twitch
+          <input id="channel" placeholder="tu_usuario" />
+        </label>
+        <label>Voz
+          <select id="voice"></select>
+        </label>
+        <label>Velocidad <span id="rateValue">0%</span>
+          <input id="rate" type="range" min="-30" max="30" value="0" />
+        </label>
+        <label>Tono <span id="pitchValue">0Hz</span>
+          <input id="pitch" type="range" min="-30" max="30" value="0" />
+        </label>
+        <label>Máximo de caracteres
+          <input id="maxChars" type="number" min="20" max="400" value="180" />
+        </label>
+        <label>Cooldown por usuario (s)
+          <input id="cooldown" type="number" min="0" max="60" step="0.5" value="2" />
+        </label>
+      </div>
+
+      <div class="checks">
+        <label><input id="ignoreCommands" type="checkbox" checked /> Ignorar comandos (!sens, !rank…)</label>
+        <label><input id="ignoreUrls" type="checkbox" checked /> Ignorar mensajes con links</label>
+        <label><input id="readUsername" type="checkbox" /> Leer nombre del usuario</label>
+      </div>
+
+      <label>Usuarios ignorados (uno por línea)
+        <textarea id="blacklist" rows="7"></textarea>
+      </label>
+
+      <div class="testbox">
+        <input id="testText" value="Khriz, acabas de whiffear otra vez." />
+        <button class="btn" id="testBtn">Probar voz</button>
+      </div>
+
+      <button class="btn primary wide" id="generateBtn">Generar Browser Source</button>
+      <div id="sourceBox" class="source hidden">
+        <div>
+          <strong>URL privada para OBS</strong>
+          <p>Pégala como Browser Source. No la compartas.</p>
+        </div>
+        <input id="sourceUrl" readonly />
+        <button class="btn" id="copyBtn">Copiar</button>
+      </div>
+    </section>
+
+    <section class="card roadmap">
+      <h2>Siguiente</h2>
+      <div class="chips"><span>Twitch ✓</span><span>Kick</span><span>YouTube</span><span>TikTok</span></div>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
