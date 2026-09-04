@@ -28,20 +28,12 @@ import storage
 
 try:
     from TikTokLive import TikTokLiveClient
-    from TikTokLive.events import CommentEvent, ConnectEvent
+    from TikTokLive.events import CommentEvent
     TIKTOKLIVE_AVAILABLE = True
 except Exception:
     TikTokLiveClient = None
     CommentEvent = None
-    ConnectEvent = None
     TIKTOKLIVE_AVAILABLE = False
-
-try:
-    import pytchat
-    PYTCHAT_AVAILABLE = True
-except Exception:
-    pytchat = None
-    PYTCHAT_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parent
 APP_URL = os.getenv("APP_URL", "http://localhost:8000").rstrip("/")
@@ -52,7 +44,7 @@ KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
-app = FastAPI(title="KZTTS", version="0.6.1")
+app = FastAPI(title="KZTTS", version="0.6.0")
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -186,8 +178,7 @@ def kick_configured() -> bool:
 
 
 def youtube_configured() -> bool:
-    # v0.6.1 reads public YouTube chat without consuming Data API quota.
-    return PYTCHAT_AVAILABLE
+    return bool(YOUTUBE_API_KEY)
 
 
 def tiktok_configured() -> bool:
@@ -354,7 +345,7 @@ async def kick_subscribe_chat(access_token: str) -> dict:
 
 @app.get("/")
 async def index():
-    return FileResponse(BASE_DIR / "static" / "index.html")
+    return FileResponse(BASE_DIR / "static" / "index.html", headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"})
 
 
 @app.get("/overlay")
@@ -716,7 +707,7 @@ async def create_overlay(req: OverlayRequest, request: Request):
     if req.enable_kick and not kick:
         raise HTTPException(status_code=401, detail="Conecta Kick primero")
     if req.enable_youtube and not youtube_configured():
-        raise HTTPException(status_code=500, detail="Falta pytchat-ng en el servidor")
+        raise HTTPException(status_code=500, detail="Falta YOUTUBE_API_KEY en Railway")
     youtube_handle = req.youtube_handle.strip()
     if req.enable_youtube and not youtube_handle:
         raise HTTPException(status_code=400, detail="Escribe el @handle de YouTube")
@@ -948,130 +939,216 @@ def unregister_kick_client(user_id: int, key: str):
         kick_clients.pop(user_id, None)
 
 
+async def youtube_channel_id(data: dict) -> str:
+    cached = data.get("youtube_channel_id")
+    if cached:
+        return cached
+    handle = (data.get("youtube_handle") or "").strip()
+    if not handle:
+        raise RuntimeError("Falta el @handle de YouTube")
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(
+            "https://www.googleapis.com/youtube/v3/channels",
+            params={
+                "part": "id,snippet",
+                "forHandle": handle,
+                "key": YOUTUBE_API_KEY,
+            },
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"YouTube channel {r.status_code}: {r.text[:240]}")
+        items = r.json().get("items", [])
+        if not items:
+            raise RuntimeError(f"No encontré el canal {handle}")
+        data["youtube_channel_id"] = items[0]["id"]
+        data["youtube_channel_title"] = (items[0].get("snippet") or {}).get("title") or handle
+        return data["youtube_channel_id"]
+
+
 async def youtube_live_video_id(data: dict) -> str | None:
-    """Resolve the active public livestream without burning YouTube API quota."""
     handle = (data.get("youtube_handle") or "").strip()
     if not handle:
         return None
-    if not handle.startswith("@"):
-        handle = f"@{handle}"
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-        "Accept-Language": "es-MX,es;q=0.9,en;q=0.7",
-    }
-
-    async with httpx.AsyncClient(timeout=18, follow_redirects=True, headers=headers) as client:
-        # The canonical /live route is the cheapest and most reliable when the channel is live.
-        for url in (f"https://www.youtube.com/{handle}/live", f"https://www.youtube.com/{handle}/streams"):
-            try:
-                r = await client.get(url)
-            except Exception:
-                continue
-
+    # First try YouTube's public /live route. This normally redirects straight
+    # to the current broadcast and avoids consuming Search API quota.
+    try:
+        async with httpx.AsyncClient(
+            timeout=15,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 KZTTS/0.3.1"},
+        ) as client:
+            r = await client.get(f"https://www.youtube.com/{handle}/live")
             parsed = urlparse(str(r.url))
             if parsed.path == "/watch":
                 video_id = (parse_qs(parsed.query).get("v") or [None])[0]
                 if video_id:
                     return video_id
+    except Exception:
+        pass
 
-            # YouTube sometimes returns the channel HTML instead of redirecting bots.
-            # Look only for video ids sitting next to a LIVE marker, not arbitrary uploads.
-            text = r.text
-            for match in re.finditer(r'"videoId":"([A-Za-z0-9_-]{11})"', text):
-                left = max(0, match.start() - 3500)
-                right = min(len(text), match.end() + 3500)
-                ctx = text[left:right]
-                if ('"isLiveNow":true' in ctx or 'BADGE_STYLE_TYPE_LIVE_NOW' in ctx or '"style":"LIVE"' in ctx):
-                    return match.group(1)
+    # Fallback: official Data API search. Throttled while no stream is live.
+    now = time.monotonic()
+    if now - float(data.get("youtube_last_search", 0)) < 120:
+        return None
+    data["youtube_last_search"] = now
+
+    channel_id = await youtube_channel_id(data)
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(
+            "https://www.googleapis.com/youtube/v3/search",
+            params={
+                "part": "id",
+                "channelId": channel_id,
+                "eventType": "live",
+                "type": "video",
+                "maxResults": 5,
+                "key": YOUTUBE_API_KEY,
+            },
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"YouTube live search {r.status_code}: {r.text[:240]}")
+        for item in r.json().get("items", []):
+            video_id = (item.get("id") or {}).get("videoId")
+            if video_id:
+                return video_id
     return None
 
 
-async def youtube_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str, float]):
-    if not PYTCHAT_AVAILABLE:
-        raise RuntimeError("pytchat-ng no está instalado")
+async def youtube_active_chat(data: dict) -> tuple[str, str] | None:
+    video_id = await youtube_live_video_id(data)
+    if not video_id:
+        return None
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(
+            "https://www.googleapis.com/youtube/v3/videos",
+            params={
+                "part": "snippet,liveStreamingDetails",
+                "id": video_id,
+                "key": YOUTUBE_API_KEY,
+            },
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"YouTube video {r.status_code}: {r.text[:240]}")
+        items = r.json().get("items", [])
+        if not items:
+            return None
+        item = items[0]
+        live = item.get("liveStreamingDetails") or {}
+        chat_id = live.get("activeLiveChatId")
+        if not chat_id:
+            return None
+        title = (item.get("snippet") or {}).get("title") or "Directo de YouTube"
+        data["youtube_video_id"] = video_id
+        return chat_id, title
 
+
+YOUTUBE_CHAT_TYPES = {
+    "textMessageEvent",
+    "superChatEvent",
+    "memberMilestoneChatEvent",
+}
+
+
+async def youtube_chat_page(data: dict, live_chat_id: str, page_token: str | None):
+    params = {
+        "liveChatId": live_chat_id,
+        "part": "id,snippet,authorDetails",
+        "maxResults": 200,
+        "hl": "es",
+        "key": YOUTUBE_API_KEY,
+    }
+    if page_token:
+        params["pageToken"] = page_token
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(
+            "https://www.googleapis.com/youtube/v3/liveChat/messages",
+            params=params,
+        )
+        if r.status_code in (403, 404):
+            return None
+        if r.status_code != 200:
+            raise RuntimeError(f"YouTube chat {r.status_code}: {r.text[:240]}")
+        return r.json()
+
+
+async def youtube_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str, float]):
     waiting_sent = False
     while True:
-        try:
-            video_id = await youtube_live_video_id(data)
-            if not video_id:
+        chat_id = data.get("youtube_chat_id")
+        if not chat_id:
+            active = await youtube_active_chat(data)
+            if not active:
                 if not waiting_sent:
                     await socket.send({
                         "type": "status",
                         "platform": "youtube",
-                        "message": f"YouTube {data.get('youtube_handle', '')}: buscando el LIVE",
+                        "message": f"YouTube {data.get('youtube_handle', '')}: esperando un directo activo",
                     })
                     waiting_sent = True
-                await asyncio.sleep(12)
+                await asyncio.sleep(20)
                 continue
-
+            chat_id, title = active
+            data["youtube_chat_id"] = chat_id
+            data["youtube_live_title"] = title
+            data.pop("youtube_page_token", None)
             waiting_sent = False
-            data["youtube_video_id"] = video_id
-            await socket.send({"type": "status", "platform": "youtube", "message": f"YouTube conectado: {video_id}"})
-            print(f"[KZTTS][YouTube] connected video={video_id}", flush=True)
+            await socket.send({"type": "status", "platform": "youtube", "message": f"YouTube conectado: {title}"})
 
-            chat = await asyncio.to_thread(pytchat.create, video_id=video_id)
-            # Drain the initial history so KZTTS only speaks new messages.
-            try:
-                await asyncio.to_thread(chat.get)
-            except Exception:
-                pass
-
-            seen = set()
-            while chat.is_alive():
-                batch = await asyncio.to_thread(chat.get)
-                items = await asyncio.to_thread(lambda: list(batch.sync_items()))
-                for item in items:
-                    item_id = str(getattr(item, "id", "") or "")
-                    if item_id and item_id in seen:
-                        continue
-                    if item_id:
-                        seen.add(item_id)
-                        if len(seen) > 3000:
-                            seen.clear()
-                    message = str(getattr(item, "message", "") or "").strip()
-                    author_obj = getattr(item, "author", None)
-                    display = str(getattr(author_obj, "name", "") or "YouTube").strip()
-                    clean = should_read(data, display, message, cooldowns)
-                    if not clean:
-                        continue
-                    spoken = f"{display} dice: {clean}" if data["read_username"] else clean
-                    await socket.send({
-                        "type": "message",
-                        "platform": "youtube",
-                        "user": display,
-                        "text": spoken,
-                        "voice": data["voice"],
-                        "rate": data["rate"],
-                        "pitch": data["pitch"],
-                        "volume": data.get("volume", 100),
-                    })
-                await asyncio.sleep(0.4)
-
-            try:
-                term = getattr(chat, "terminate", None)
-                if term:
-                    await asyncio.to_thread(term)
-            except Exception:
-                pass
+        page_token = data.get("youtube_page_token")
+        page = await youtube_chat_page(data, chat_id, page_token)
+        if page is None or page.get("offlineAt"):
+            data.pop("youtube_chat_id", None)
+            data.pop("youtube_live_title", None)
+            data.pop("youtube_page_token", None)
             data.pop("youtube_video_id", None)
-            await socket.send({"type": "status", "platform": "youtube", "message": "YouTube: LIVE terminado; buscando el siguiente"})
-            await asyncio.sleep(8)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            print(f"[KZTTS][YouTube] {type(exc).__name__}: {exc}", flush=True)
-            try:
-                await socket.send({"type": "error", "platform": "youtube", "message": f"YouTube: {exc}"})
-            except Exception:
-                pass
-            await asyncio.sleep(6)
+            await socket.send({"type": "status", "platform": "youtube", "message": "YouTube: el directo terminó; esperando el siguiente"})
+            await asyncio.sleep(12)
+            continue
+
+        next_token = page.get("nextPageToken")
+        first_page = page_token is None
+        if next_token:
+            data["youtube_page_token"] = next_token
+
+        # Skip chat history on first attach; only read messages sent after KZTTS starts.
+        if not first_page:
+            for item in page.get("items", []):
+                snippet = item.get("snippet") or {}
+                if snippet.get("type") not in YOUTUBE_CHAT_TYPES:
+                    continue
+                message = snippet.get("displayMessage") or ""
+                author = item.get("authorDetails") or {}
+                display = author.get("displayName") or "YouTube"
+                clean = should_read(data, display, message, cooldowns)
+                if not clean:
+                    continue
+                spoken = f"{display} dice: {clean}" if data["read_username"] else clean
+                await socket.send({
+                    "type": "message",
+                    "platform": "youtube",
+                    "user": display,
+                    "text": spoken,
+                    "voice": data["voice"],
+                    "rate": data["rate"],
+                    "pitch": data["pitch"],
+                    "volume": data.get("volume", 100),
+                })
+
+        wait_ms = max(1000, int(page.get("pollingIntervalMillis") or 5000))
+        await asyncio.sleep(wait_ms / 1000)
 
 
 async def youtube_reader_safe(socket: OverlaySocket, data: dict, cooldowns: Dict[str, float]):
-    # Reader already self-recovers; keep this wrapper only for cancellation safety.
-    await youtube_reader(socket, data, cooldowns)
+    try:
+        await youtube_reader(socket, data, cooldowns)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        try:
+            await socket.send({"type": "error", "platform": "youtube", "message": f"YouTube: {exc}"})
+        except Exception:
+            pass
 
 
 def tiktok_user_fields(event) -> tuple[str, str]:
@@ -1088,13 +1165,10 @@ async def tiktok_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str, 
     if not handle:
         raise RuntimeError("Falta el @usuario de TikTok")
 
-    retry = 6
+    retry = 8
+    waiting_sent = False
     while True:
         client = TikTokLiveClient(unique_id=handle)
-
-        async def on_connect(event):
-            print(f"[KZTTS][TikTok] connected handle={handle} room={client.room_id}", flush=True)
-            await socket.send({"type": "status", "platform": "tiktok", "message": f"TikTok {handle} conectado"})
 
         async def on_comment(event):
             login, display = tiktok_user_fields(event)
@@ -1114,19 +1188,28 @@ async def tiktok_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str, 
                 "volume": data.get("volume", 100),
             })
 
-        if ConnectEvent is not None:
-            client.add_listener(ConnectEvent, on_connect)
         client.add_listener(CommentEvent, on_comment)
         try:
-            # Do NOT pre-gate with is_live(). On cloud hosts TikTok can return a false
-            # offline result even though the room itself is connectable. start() has its
-            # own room-id resolution + API fallback, so attempt the real connection.
+            is_live = await client.is_live()
+            if not is_live:
+                if not waiting_sent:
+                    await socket.send({
+                        "type": "status",
+                        "platform": "tiktok",
+                        "message": f"TikTok {handle}: esperando un LIVE público (la vista previa de LIVE Studio no cuenta)",
+                    })
+                    waiting_sent = True
+                await asyncio.sleep(15)
+                continue
+
+            waiting_sent = False
             await socket.send({"type": "status", "platform": "tiktok", "message": f"TikTok conectando a {handle}"})
-            live_task = await client.start(fetch_live_check=False)
-            retry = 6
+            live_task = await client.start()
+            retry = 8
+            await socket.send({"type": "status", "platform": "tiktok", "message": f"TikTok {handle} conectado"})
             await live_task
-            await socket.send({"type": "status", "platform": "tiktok", "message": f"TikTok {handle}: LIVE terminado; reintentando"})
-            await asyncio.sleep(5)
+            await socket.send({"type": "status", "platform": "tiktok", "message": f"TikTok {handle}: LIVE terminado; esperando el siguiente"})
+            await asyncio.sleep(10)
         except asyncio.CancelledError:
             try:
                 if getattr(client, "connected", False):
@@ -1135,13 +1218,9 @@ async def tiktok_reader(socket: OverlaySocket, data: dict, cooldowns: Dict[str, 
                 pass
             raise
         except Exception as exc:
-            print(f"[KZTTS][TikTok] {type(exc).__name__}: {exc}", flush=True)
-            try:
-                await socket.send({"type": "error", "platform": "tiktok", "message": f"TikTok: {type(exc).__name__}: {exc}"})
-            except Exception:
-                pass
+            await socket.send({"type": "error", "platform": "tiktok", "message": f"TikTok: {exc}"})
             await asyncio.sleep(retry)
-            retry = min(int(retry * 1.6), 30)
+            retry = min(int(retry * 1.7), 45)
         finally:
             try:
                 if getattr(client, "connected", False):
