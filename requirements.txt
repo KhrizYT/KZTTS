@@ -8,3 +8,4 @@ itsdangerous==2.2.0
 cryptography==45.0.6
 TikTokLive==7.0.0
 psycopg[binary]>=3.2,<4
+pytchat-ng==0.5.8
