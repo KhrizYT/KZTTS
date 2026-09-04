@@ -203,30 +203,3 @@ async function pollRuntime(){
 
 $('logoutBtn').onclick=async()=>{await fetch('/auth/logout',{method:'POST'});location.reload()};
 load();
-
-
-// KZTTS visual interaction layer — intentionally isolated from TTS/business logic.
-(function initKzVisuals(){
-  const glow=document.getElementById('cursorGlow');
-  if(glow && !window.matchMedia('(prefers-reduced-motion: reduce)').matches){
-    const layers=[...glow.querySelectorAll('.cursor-glow-layer')];
-    let tx=innerWidth*.5,ty=innerHeight*.4;
-    const pts=layers.map(()=>({x:tx,y:ty}));
-    window.addEventListener('pointermove',e=>{tx=e.clientX;ty=e.clientY;glow.style.opacity='1'},{passive:true});
-    document.documentElement.addEventListener('mouseleave',()=>glow.style.opacity='.25');
-    const speeds=[.17,.24,.34];
-    function frame(){
-      layers.forEach((layer,i)=>{const p=pts[i];p.x+=(tx-p.x)*speeds[i];p.y+=(ty-p.y)*speeds[i];layer.style.transform=`translate3d(${p.x}px,${p.y}px,0)`});
-      requestAnimationFrame(frame);
-    }
-    requestAnimationFrame(frame);
-  }
-
-  const reactive='.nav-item,.primary-button,.platform-card,.voice-card,.summary-platform,.card';
-  document.addEventListener('pointermove',e=>{
-    const el=e.target.closest(reactive);if(!el)return;
-    const r=el.getBoundingClientRect();
-    el.style.setProperty('--mx',`${((e.clientX-r.left)/r.width*100).toFixed(1)}%`);
-    el.style.setProperty('--my',`${((e.clientY-r.top)/r.height*100).toFixed(1)}%`);
-  },{passive:true});
-})();
