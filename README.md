@@ -1,4 +1,4 @@
-# KZTTS v0.6
+# KZTTS v0.7.1
 
 Rediseño completo del dashboard de KZTTS sobre la base persistente de v0.5.
 
@@ -27,3 +27,7 @@ Reemplaza en GitHub:
 No necesitas cambiar PostgreSQL ni añadir nuevas variables de entorno.
 
 Railway redeployará automáticamente. La URL permanente de OBS vinculada a tu cuenta se conserva.
+
+
+## v0.7.1
+Rediseño negro/rojo con assets versionados para evitar cache del navegador/CDN.
